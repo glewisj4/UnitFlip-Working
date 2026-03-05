@@ -1,0 +1,52 @@
+import { Role } from './auth';
+
+export type AuditEventType =
+  | 'ROOM_CREATED'
+  | 'ROOM_UPDATED'
+  | 'PRODUCT_CREATED'
+  | 'PRODUCT_UPDATED'
+  | 'PRODUCT_DELETED'
+  | 'TEMPLATE_CREATED'
+  | 'TEMPLATE_UPDATED'
+  | 'TEMPLATE_DELETED'
+  | 'DATA_IMPORTED'
+  | 'PDF_GENERATED'
+  | 'SHARE_LINK_CREATED'
+  | 'SHARE_LINK_REVOKED'
+  | 'SHARE_LINK_ACCESSED'
+  | 'RETENTION_POLICY_UPDATED'
+  | 'RETENTION_SCAN_COMPLETED'
+  | 'RETENTION_PURGE_APPROVED'
+  | 'RETENTION_ARCHIVE_EXPORTED'
+  | 'RETENTION_ARCHIVE_REQUESTED'
+  | 'RETENTION_ARCHIVE_READY'
+  | 'RETENTION_ARCHIVE_FAILED'
+  | 'RETENTION_PHOTO_PURGED'
+  | 'PHOTO_CAPTURED'
+  | 'PHOTO_UPLOADED'
+  | 'PHOTO_DELETED'
+  | 'UNIT_CREATED'
+  | 'UNIT_UPDATED'
+  | 'UNIT_ARCHIVED'
+  | 'INSPECTION_CREATED'
+  | 'INSPECTION_UPDATED'
+  | 'INSPECTION_PHOTO_ADDED'
+  | 'INSPECTION_PHOTO_REMOVED'
+  | 'PDF_REPORT_REQUESTED'
+  | 'PDF_REPORT_READY'
+  | 'PDF_REPORT_FAILED'
+  | 'REPORT_GENERATED_REMOTE'
+  | 'SHARE_RESOLVED_REMOTE';
+
+export interface AuditEvent {
+  id: string;
+  ts: number;
+  orgId: string;
+  userId: string;
+  userRole: Role;
+  type: AuditEventType;
+  entityType?: string;
+  entityId?: string;
+  message?: string;
+  metadata?: Record<string, unknown>;
+}

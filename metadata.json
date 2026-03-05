@@ -1,0 +1,5 @@
+{
+  "name": "UnitFlip working",
+  "description": "A streamlined database manager for rental unit turnover products. Organize maintenance items by room, associate specific Lowes product options (Good/Better/Best), and generate inspection checklists instantly with AI assistance.",
+  "requestFramePermissions": []
+}
