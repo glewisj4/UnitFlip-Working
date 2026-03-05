@@ -93,10 +93,10 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory 
   });
 
   // Import State
-  const [isImporting, setIsImporting] = useState(false);
-  const [importUrl, setImportUrl] = useState('');
-  const [isResolving, setIsResolving] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
+  // const [isImporting, setIsImporting] = useState(false);
+  // const [importUrl, setImportUrl] = useState('');
+  // const [isResolving, setIsResolving] = useState(false);
+  // const [importError, setImportError] = useState<string | null>(null);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const menuContainerRef = useRef<HTMLDivElement>(null);
@@ -282,51 +282,8 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory 
 
   const handleImportUrl = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!importUrl.trim() || !orgId) return;
-
-    setIsResolving(true);
-    setImportError(null);
-
-    try {
-      const { resolveLowesUrl } = await import('../services/retailResolve');
-      const resolved = await resolveLowesUrl(importUrl.trim());
-
-      // Map resolved product to CatalogItem
-      const newItem: CatalogItem = {
-        id: createId(),
-        orgId,
-        name: resolved.title,
-        description: resolved.description || '',
-        categoryName: resolved.categoryPath?.[0] || 'Uncategorized',
-        tags: ['Imported', 'Lowe\'s'],
-        defaultQty: 1,
-        unit: resolved.uom || 'ea',
-        defaultTier: Tier.STANDARD,
-        options: [
-          {
-            id: createId(),
-            name: resolved.brand ? `${resolved.brand} - ${resolved.title}` : resolved.title,
-            price: resolved.price?.amount || 0,
-            sku: resolved.source.itemNumber || '',
-            tier: Tier.STANDARD,
-            imageUrl: resolved.imageUrl,
-          }
-        ],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-
-      // Open editor with resolved data
-      setProducts(prev => [...prev, newItem]);
-      setSelectedProductId(newItem.id);
-      setIsImporting(false);
-      setImportUrl('');
-    } catch (err: any) {
-      console.error('Import failed:', err);
-      setImportError(err.message || 'Failed to resolve URL. Is the server running?');
-    } finally {
-      setIsResolving(false);
-    }
+    // Placeholder for future PDF import
+    alert('Lowe’s Quote (PDF) import coming soon!');
   };
 
   const handleDuplicate = async (itemId: string) => {
@@ -476,11 +433,11 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory 
           </button>
 
           <button
-            onClick={() => setIsImporting(true)}
-            className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-semibold text-sm transition-all active:scale-95"
-            title="Import from Lowe's"
+            disabled
+            className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 text-slate-400 rounded-xl cursor-not-allowed font-semibold text-sm transition-all"
+            title="Import Lowe’s Quote (PDF) — coming next"
           >
-            <ExternalLink size={16} /> <span className="hidden lg:inline">Import</span>
+            <ExternalLink size={16} /> <span className="hidden lg:inline">Import PDF (Soon)</span>
           </button>
 
           <button
@@ -879,67 +836,7 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory 
         />
       )}
 
-      {/* Import Modal */}
-      {isImporting && (
-        <div 
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200"
-          onMouseDown={(e) => e.target === e.currentTarget && setIsImporting(false)}
-        >
-          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl p-6 animate-in zoom-in-95 duration-200">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-slate-900">Import from Lowe's</h2>
-              <button onClick={() => setIsImporting(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                <X size={20} className="text-slate-400" />
-              </button>
-            </div>
-
-            <form onSubmit={handleImportUrl}>
-              <div className="mb-6">
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Lowe's Product URL</label>
-                <input
-                  autoFocus
-                  type="url"
-                  placeholder="https://www.lowes.com/pd/..."
-                  className="w-full px-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-lowes-blue transition-all text-sm"
-                  value={importUrl}
-                  onChange={(e) => setImportUrl(e.target.value)}
-                  required
-                />
-                {importError && (
-                  <p className="mt-2 text-xs text-red-500 font-medium">{importError}</p>
-                )}
-                <p className="mt-3 text-[10px] text-slate-400 leading-relaxed">
-                  Paste a Lowe's product URL to automatically extract title, brand, price, and images.
-                </p>
-              </div>
-
-              <div className="flex gap-3 justify-end">
-                <button
-                  type="button"
-                  onClick={() => setIsImporting(false)}
-                  className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-50 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={!importUrl.trim() || isResolving}
-                  className="px-6 py-2 bg-lowes-blue text-white font-bold rounded-lg hover:bg-lowes-hover shadow-lg shadow-blue-100 transition-all disabled:opacity-50 flex items-center gap-2"
-                >
-                  {isResolving ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Resolving...
-                    </>
-                  ) : (
-                    'Import Product'
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Import Modal (Removed) */}
 
       {/* Confirmation Dialog */}
       {confirmDialog.isOpen && (

@@ -4,34 +4,24 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
-    "dev:client": "vite",
-    "dev:server": "npm --prefix server/retail-resolver run dev",
+    "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@fastify/cors": "^11.2.0",
-    "@fastify/rate-limit": "^10.3.0",
     "@google/genai": "^1.42.0",
     "@supabase/supabase-js": "^2.98.0",
-    "cheerio": "^1.2.0",
-    "fastify": "^5.7.4",
     "fflate": "^0.8.2",
-    "lru-cache": "^11.2.6",
     "lucide-react": "^0.575.0",
     "motion": "^12.34.5",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "undici": "^7.22.0",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
-    "concurrently": "^9.2.1",
-    "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
