@@ -3,8 +3,10 @@ import { Shield, Trash2, Download, CheckCircle, AlertTriangle, RefreshCw, Loader
 import { RetentionService } from '../core/services/RetentionService';
 import { MediaService } from '../core/services/MediaService';
 import { ArchiveService } from '../core/services/ArchiveService';
+import { AuditLogService } from '../core/services/AuditLogService';
 import { RetentionPolicy, PendingPurgeItem } from '../core/models/retention';
 import { ArchiveJob } from '../core/models/archive';
+import { AuditEvent } from '../core/models/audit';
 import { useAppContext } from '../core/hooks/useAppContext';
 
 export const AdminRetentionPanel: React.FC = () => {
@@ -12,6 +14,7 @@ export const AdminRetentionPanel: React.FC = () => {
   const [policy, setPolicy] = useState<RetentionPolicy | null>(null);
   const [pending, setPending] = useState<PendingPurgeItem[]>([]);
   const [archives, setArchives] = useState<Record<string, ArchiveJob[]>>({});
+  const [auditLogs, setAuditLogs] = useState<AuditEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [exportingIds, setExportingIds] = useState<Set<string>>(new Set());
@@ -31,13 +34,15 @@ export const AdminRetentionPanel: React.FC = () => {
     if (!org) return;
     setIsLoading(true);
     try {
-      const [p, items, allArchives] = await Promise.all([
+      const [p, items, allArchives, logs] = await Promise.all([
         RetentionService.getPolicy(org.id),
         RetentionService.listPending(org.id),
-        ArchiveService.listArchives(org.id)
+        ArchiveService.listArchives(org.id),
+        AuditLogService.listEvents({ orgId: org.id, limit: 20 })
       ]);
       setPolicy(p);
       setPending(items);
+      setAuditLogs(logs);
       
       // Group archives by pendingPurgeId
       const archiveMap: Record<string, ArchiveJob[]> = {};
@@ -245,6 +250,68 @@ export const AdminRetentionPanel: React.FC = () => {
             <span className="text-slate-500 mb-1">days</span>
           </div>
           <p className="text-xs text-slate-400 mt-2">Days pending before auto-purge (if enabled).</p>
+        </div>
+      </div>
+
+      {/* Audit Log Section */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Clock size={18} className="text-slate-600" />
+            <h3 className="font-bold text-slate-800">Recent Audit History</h3>
+          </div>
+          <button 
+            onClick={loadData}
+            className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="text-xs font-semibold text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
+                <th className="px-6 py-3">Event</th>
+                <th className="px-6 py-3">User</th>
+                <th className="px-6 py-3">Details</th>
+                <th className="px-6 py-3 text-right">Time</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {auditLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500">
+                    No audit events found.
+                  </td>
+                </tr>
+              ) : (
+                auditLogs.map(event => (
+                  <tr key={event.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4">
+                      <span className="text-xs font-bold text-slate-700 uppercase tracking-tight">
+                        {event.type.replace(/_/g, ' ')}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-col">
+                        <span className="text-sm font-medium text-slate-900">{event.userId}</span>
+                        <span className="text-[10px] text-slate-400 uppercase">{event.userRole}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="text-sm text-slate-600 max-w-xs truncate">
+                        {event.message || (event.metadata && JSON.stringify(event.metadata)) || '-'}
+                      </p>
+                    </td>
+                    <td className="px-6 py-4 text-right text-xs text-slate-400">
+                      {new Date(event.ts).toLocaleString()}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

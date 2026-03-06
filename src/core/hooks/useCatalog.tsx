@@ -4,6 +4,7 @@ import { BundleRuleService } from '../services/BundleRuleService';
 import { CatalogService } from '../services/CatalogService';
 import { BundleSuggestionsModal } from '../../components/BundleSuggestionsModal';
 import { createId } from '../../services/storage';
+import { ProductInstanceService } from '../services/ProductInstanceService';
 
 interface CatalogContextType {
   addCatalogItemToList: (listRef: ListRef, catalogItemId: string, orgId: string) => Promise<void>;
@@ -53,20 +54,15 @@ export const CatalogProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const createProductInstance = async (orgId: string, listRef: ListRef, item: CatalogItem, qty: number) => {
-    const instance: ProductInstance = {
-      id: createId(),
-      orgId,
+    const instance = await ProductInstanceService.addInstance(orgId, {
       listRef,
       catalogItemId: item.id,
       qty,
       unit: item.unit,
       status: ProductStatus.PLANNING,
-      addedAt: Date.now(),
-      updatedAt: Date.now(),
-    };
+    });
 
-    // TODO: Persist the instance to the appropriate list storage
-    console.log('Adding product instance:', instance);
+    console.log('Added product instance:', instance);
     
     // For now, we'll trigger a custom event that lists can listen to
     window.dispatchEvent(new CustomEvent('product-instance-added', { detail: instance }));

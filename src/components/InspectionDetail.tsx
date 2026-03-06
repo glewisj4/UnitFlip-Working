@@ -11,6 +11,12 @@ import { useAppContext } from '../core/hooks/useAppContext';
 import { useAuditLogger } from '../core/hooks/useAuditLogger';
 import { useSyncEngine } from '../core/hooks/useSyncEngine';
 import { PhotoAsset } from '../core/models/media';
+import { useCatalog } from '../core/hooks/useCatalog';
+import { ProductInstanceService } from '../core/services/ProductInstanceService';
+import { CatalogService } from '../core/services/CatalogService';
+import { ProductInstance, CatalogItem } from '../core/models/types';
+import { ProductSelectorModal } from './ProductSelectorModal';
+import { Package, PlusCircle, MinusCircle } from 'lucide-react';
 
 interface InspectionDetailProps {
   inspectionId: string;
@@ -21,8 +27,11 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
   const { org, user, flags } = useAppContext();
   const { log } = useAuditLogger();
   const { triggerSyncNow } = useSyncEngine();
+  const { addCatalogItemToList } = useCatalog();
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [photos, setPhotos] = useState<PhotoAsset[]>([]);
+  const [productInstances, setProductInstances] = useState<ProductInstance[]>([]);
+  const [catalogItems, setCatalogItems] = useState<Record<string, CatalogItem>>({});
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -34,6 +43,9 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
   const [isCreatingLink, setIsCreatingLink] = useState(false);
   const [expiryDays, setExpiryDays] = useState(7);
 
+  // Product selection state
+  const [isProductSelectorOpen, setIsProductSelectorOpen] = useState(false);
+
   // Form state
   const [title, setTitle] = useState('');
   const [status, setStatus] = useState<InspectionStatus>('draft');
@@ -43,6 +55,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
     if (org && inspectionId) {
       loadInspection();
       loadLatestReport();
+      loadProductInstances();
       if (flags.public_share_links) {
         loadShareLinks();
       }
@@ -52,6 +65,19 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
       Object.values(previews).forEach(url => URL.revokeObjectURL(url as string));
     };
   }, [org, inspectionId, flags.public_share_links]);
+
+  // Listen for product instance additions (from useCatalog hook)
+  useEffect(() => {
+    const handleInstanceAdded = (e: any) => {
+      const instance = e.detail as ProductInstance;
+      if (instance.listRef.kind === 'inspection' && instance.listRef.id === inspectionId) {
+        setProductInstances(prev => [...prev, instance]);
+        loadCatalogItemsForInstances([...productInstances, instance]);
+      }
+    };
+    window.addEventListener('product-instance-added', handleInstanceAdded);
+    return () => window.removeEventListener('product-instance-added', handleInstanceAdded);
+  }, [inspectionId, productInstances]);
 
   // Poll for report status updates if generating
   useEffect(() => {
@@ -85,6 +111,24 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
       if (!org) return;
       const links = await ShareLinkService.listLinks(org.id, { inspectionId });
       setShareLinks(links);
+  };
+
+  const loadProductInstances = async () => {
+    if (!org) return;
+    const instances = await ProductInstanceService.listInstances(org.id, { kind: 'inspection', id: inspectionId });
+    setProductInstances(instances);
+    await loadCatalogItemsForInstances(instances);
+  };
+
+  const loadCatalogItemsForInstances = async (instances: ProductInstance[]) => {
+    if (!org) return;
+    const itemIds = Array.from(new Set(instances.map(i => i.catalogItemId)));
+    const items = await Promise.all(itemIds.map(id => CatalogService.getItem(org.id, id)));
+    const itemMap: Record<string, CatalogItem> = {};
+    items.forEach(item => {
+      if (item) itemMap[item.id] = item;
+    });
+    setCatalogItems(prev => ({ ...prev, ...itemMap }));
   };
 
   const loadPhotos = async (photoIds: string[]) => {
@@ -186,6 +230,31 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
         }
     } catch (e) {
         console.error(e);
+    }
+  };
+
+  const handleAddProduct = async (item: CatalogItem) => {
+    if (!org) return;
+    await addCatalogItemToList({ kind: 'inspection', id: inspectionId }, item.id, org.id);
+  };
+
+  const handleRemoveProductInstance = async (instanceId: string) => {
+    if (!org || !confirm('Remove this product from inspection?')) return;
+    try {
+      await ProductInstanceService.deleteInstance(org.id, instanceId);
+      setProductInstances(prev => prev.filter(i => i.id !== instanceId));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleUpdateProductQty = async (instanceId: string, qty: number) => {
+    if (!org) return;
+    try {
+      await ProductInstanceService.updateInstance(org.id, instanceId, { qty });
+      setProductInstances(prev => prev.map(i => i.id === instanceId ? { ...i, qty } : i));
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -371,6 +440,69 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
             )}
         </div>
 
+        {/* Products Section */}
+        <div className="border-t border-slate-200 pt-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-slate-800 flex items-center gap-2">
+              <Package size={20} className="text-slate-600" />
+              Products ({productInstances.length})
+            </h3>
+            <button
+              onClick={() => setIsProductSelectorOpen(true)}
+              className="text-sm bg-lowes-blue text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+            >
+              <PlusCircle size={16} />
+              Add Product
+            </button>
+          </div>
+
+          {productInstances.length === 0 ? (
+            <div className="bg-slate-50 border border-dashed border-slate-200 rounded-lg p-8 text-center text-slate-400 text-sm">
+              No products added yet. Click "Add Product" to select from catalog.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {productInstances.map((instance) => {
+                const item = catalogItems[instance.catalogItemId];
+                return (
+                  <div key={instance.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-slate-800">{item?.name || 'Loading...'}</h4>
+                      <p className="text-xs text-slate-500">
+                        {item?.options[0]?.sku && `SKU: ${item.options[0].sku}`}
+                        {item?.options[0]?.price && ` • $${item.options[0].price.toFixed(2)}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleUpdateProductQty(instance.id, Math.max(1, instance.qty - 1))}
+                          className="p-1 hover:bg-slate-200 rounded-lg text-slate-500"
+                        >
+                          <MinusCircle size={18} />
+                        </button>
+                        <span className="w-8 text-center font-bold text-slate-700">{instance.qty}</span>
+                        <button
+                          onClick={() => handleUpdateProductQty(instance.id, instance.qty + 1)}
+                          className="p-1 hover:bg-slate-200 rounded-lg text-slate-500"
+                        >
+                          <PlusCircle size={18} />
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveProductInstance(instance.id)}
+                        className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* Reports Section (Feature Flagged) */}
         {flags.pdf_reports && (
             <div className="border-t border-slate-200 pt-6">
@@ -544,6 +676,12 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
             </div>
         )}
       </div>
+
+      <ProductSelectorModal
+        isOpen={isProductSelectorOpen}
+        onClose={() => setIsProductSelectorOpen(false)}
+        onSelect={handleAddProduct}
+      />
     </div>
   );
 };

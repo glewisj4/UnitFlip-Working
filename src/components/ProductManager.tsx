@@ -37,15 +37,24 @@ import { BundleManager } from './BundleManager';
 import { BundleSuggestionsModal } from './BundleSuggestionsModal';
 import { useDebouncedCallback } from '../core/hooks/useDebouncedCallback';
 
+import { ImportWizard } from './Import/ImportWizard';
+import { StagingArea } from './Import/StagingArea';
+
 interface ProductManagerProps {
   initialCategory?: string | null;
   onImport?: () => void;
+  onSelect?: (item: CatalogItem) => void;
+  selectionMode?: boolean;
 }
 
 type SortKey = 'name' | 'category' | 'updatedAt';
 type SortOrder = 'asc' | 'desc';
 
-export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory }) => {
+export const ProductManager: React.FC<ProductManagerProps> = ({ 
+  initialCategory, 
+  onSelect, 
+  selectionMode = false 
+}) => {
   const { org } = useAppContext();
   const orgId = org?.id;
 
@@ -93,10 +102,8 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory 
   });
 
   // Import State
-  // const [isImporting, setIsImporting] = useState(false);
-  // const [importUrl, setImportUrl] = useState('');
-  // const [isResolving, setIsResolving] = useState(false);
-  // const [importError, setImportError] = useState<string | null>(null);
+  const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
+  const [isStagingAreaOpen, setIsStagingAreaOpen] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const menuContainerRef = useRef<HTMLDivElement>(null);
@@ -280,10 +287,14 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory 
     }
   };
 
-  const handleImportUrl = async (e: React.FormEvent) => {
-    e.preventDefault();
-    // Placeholder for future PDF import
-    alert('Lowe’s Quote (PDF) import coming soon!');
+  const handleImportClick = () => {
+    setIsImportWizardOpen(true);
+  };
+
+  const handleImportComplete = (batchId: string) => {
+    setIsImportWizardOpen(false);
+    setIsStagingAreaOpen(true);
+    // Optionally refresh data if needed, but StagingArea manages its own state
   };
 
   const handleDuplicate = async (itemId: string) => {
@@ -433,11 +444,19 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory 
           </button>
 
           <button
-            disabled
-            className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 text-slate-400 rounded-xl cursor-not-allowed font-semibold text-sm transition-all"
-            title="Import Lowe’s Quote (PDF) — coming next"
+            onClick={() => setIsStagingAreaOpen(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-semibold text-sm transition-all active:scale-95"
+            title="Open Staging Area"
           >
-            <ExternalLink size={16} /> <span className="hidden lg:inline">Import PDF (Soon)</span>
+            <Layers size={16} /> <span className="hidden lg:inline">Staging</span>
+          </button>
+
+          <button
+            onClick={handleImportClick}
+            className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-semibold text-sm transition-all active:scale-95"
+            title="Import Lowe’s Quote (PDF)"
+          >
+            <ExternalLink size={16} /> <span className="hidden lg:inline">Import PDF</span>
           </button>
 
           <button
@@ -533,74 +552,88 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory 
                     </td>
 
                     <td className="px-4 py-3 text-right">
-                      <div ref={menuContainerRef} className="relative inline-block">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenMenuForId((prev) => (prev === item.id ? null : item.id));
-                          }}
-                          className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
-                          aria-label="Row actions"
-                        >
-                          <MoreVertical size={16} />
-                        </button>
-
-                        {openMenuForId === item.id && (
-                          <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-30">
+                      <div className="flex items-center justify-end gap-2">
+                        {selectionMode && onSelect ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelect(item);
+                            }}
+                            className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 transition-all active:scale-95 flex items-center gap-1"
+                          >
+                            <PlusCircle size={14} /> Select
+                          </button>
+                        ) : (
+                          <div ref={menuContainerRef} className="relative inline-block">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSelectedProductId(item.id);
-                                setOpenMenuForId(null);
+                                setOpenMenuForId((prev) => (prev === item.id ? null : item.id));
                               }}
-                              className="w-full text-left px-4 py-2 text-xs text-slate-600 hover:bg-slate-50 flex items-center gap-2"
+                              className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                              aria-label="Row actions"
                             >
-                              <Edit2 size={14} /> Edit in Inspector
+                              <MoreVertical size={16} />
                             </button>
 
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDuplicate(item.id);
-                              }}
-                              className="w-full text-left px-4 py-2 text-xs text-slate-600 hover:bg-slate-50 flex items-center gap-2"
-                            >
-                              <Copy size={14} /> Duplicate
-                            </button>
+                            {openMenuForId === item.id && (
+                              <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-xl shadow-xl border border-slate-100 py-1 z-30">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedProductId(item.id);
+                                    setOpenMenuForId(null);
+                                  }}
+                                  className="w-full text-left px-4 py-2 text-xs text-slate-600 hover:bg-slate-50 flex items-center gap-2"
+                                >
+                                  <Edit2 size={14} /> Edit in Inspector
+                                </button>
 
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleManageBundle(item);
-                              }}
-                              className="w-full text-left px-4 py-2 text-xs text-slate-600 hover:bg-slate-50 flex items-center gap-2"
-                            >
-                              <Settings size={14} /> Bundle Rules
-                            </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDuplicate(item.id);
+                                  }}
+                                  className="w-full text-left px-4 py-2 text-xs text-slate-600 hover:bg-slate-50 flex items-center gap-2"
+                                >
+                                  <Copy size={14} /> Duplicate
+                                </button>
 
-                            {hasBundle && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleTestBundle(item);
-                                }}
-                                className="w-full text-left px-4 py-2 text-xs text-emerald-600 hover:bg-slate-50 flex items-center gap-2"
-                              >
-                                <Play size={14} /> Test Bundle
-                              </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleManageBundle(item);
+                                  }}
+                                  className="w-full text-left px-4 py-2 text-xs text-slate-600 hover:bg-slate-50 flex items-center gap-2"
+                                >
+                                  <Settings size={14} /> Bundle Rules
+                                </button>
+
+                                {hasBundle && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleTestBundle(item);
+                                    }}
+                                    className="w-full text-left px-4 py-2 text-xs text-emerald-600 hover:bg-slate-50 flex items-center gap-2"
+                                  >
+                                    <Play size={14} /> Test Bundle
+                                  </button>
+                                )}
+
+                                <div className="my-1 border-t border-slate-100" />
+
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDelete(item.id);
+                                  }}
+                                  className="w-full text-left px-4 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                >
+                                  <Trash2 size={14} /> Delete
+                                </button>
+                              </div>
                             )}
-
-                            <div className="my-1 border-t border-slate-100" />
-
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDelete(item.id);
-                              }}
-                              className="w-full text-left px-4 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2"
-                            >
-                              <Trash2 size={14} /> Delete
-                            </button>
                           </div>
                         )}
                       </div>
@@ -771,6 +804,19 @@ export const ProductManager: React.FC<ProductManagerProps> = ({ initialCategory 
             </form>
           </div>
         </div>
+      )}
+
+      {/* Import Wizard */}
+      {isImportWizardOpen && (
+        <ImportWizard
+          onClose={() => setIsImportWizardOpen(false)}
+          onImportComplete={handleImportComplete}
+        />
+      )}
+
+      {/* Staging Area */}
+      {isStagingAreaOpen && (
+        <StagingArea onClose={() => setIsStagingAreaOpen(false)} />
       )}
 
       {/* Product Editor Modal (New Products only) */}
