@@ -38,6 +38,11 @@ export class CatalogService {
     return items || [];
   }
 
+  static async getItem(orgId: string, itemId: string): Promise<CatalogItem | undefined> {
+    const items = await this.getItems(orgId);
+    return items.find(i => i.id === itemId);
+  }
+
   static async saveItems(orgId: string, items: CatalogItem[]): Promise<void> {
     await adapter.setItem(this.getStoreKey(orgId), items);
   }

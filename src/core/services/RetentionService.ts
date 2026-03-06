@@ -89,6 +89,7 @@ export const RetentionService = {
       userId: 'system',
       userRole: 'admin',
       type: 'RETENTION_SCAN_COMPLETED',
+      message: `Retention scan completed: Found ${eligiblePhotos.length} eligible photos, flagged ${createdCount} for purge.`,
       metadata: { createdCount, totalEligible: eligiblePhotos.length }
     });
 

@@ -282,7 +282,15 @@ const AppContent: React.FC = () => {
     }
 
     // Default to rooms/dashboard view logic
-    return <Dashboard rooms={data.rooms} products={data.products} onSelectRoom={handleRoomSelect} onAddRoom={handleAddRoom} />;
+    return (
+      <Dashboard 
+        rooms={data.rooms} 
+        products={data.products} 
+        onSelectRoom={handleRoomSelect} 
+        onAddRoom={handleAddRoom} 
+        onViewInspections={() => setCurrentView('inspections')}
+      />
+    );
   };
 
   // If URL is a share link, show the public viewer regardless of currentView.

@@ -127,3 +127,48 @@ export interface AppState {
   bundleRules: BundleRule[];
   repairTemplates: RepairTemplate[];
 }
+
+export interface ImportBatch {
+  id: string;
+  orgId: string;
+  source: 'LOWES_QUOTE_PDF';
+  quoteNumber: string | null;
+  storeNumber: string | null;
+  createdDate: string | null; // ISO date
+  validUntil: string | null; // ISO date
+  subtotal: number | null;
+  estimatedTotal: number | null;
+  filename: string;
+  fileRef: string; // reference to stored PDF blob
+  createdAt: string; // ISO
+  createdBy: string | null;
+}
+
+export type StagedProductStatus = 'STAGED' | 'APPROVED' | 'MERGED' | 'REJECTED';
+
+export interface StagedProduct {
+  id: string;
+  orgId: string;
+  importBatchId: string;
+  lineNumber: number;
+  rawTitle: string;
+  normalizedTitle: string;
+  itemNumber: string | null;
+  modelNumber: string | null;
+  fulfillment: string | null;
+  type: string | null;
+  unitPrice: number | null;
+  qty: number | null;
+  lineTotal: number | null;
+  status: StagedProductStatus;
+  suggestedCategoryId: string | null;
+  approvedCatalogItemId: string | null;
+  duplicateOfStagedProductId: string | null;
+  notes: string | null;
+  createdAt: string; // ISO
+  
+  // New fields
+  imageUrl?: string | null;
+  duplicateCandidate?: boolean;
+  duplicateTargetId?: string | null;
+}

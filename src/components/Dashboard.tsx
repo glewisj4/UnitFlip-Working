@@ -1,22 +1,47 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Room, CatalogItem } from '../core/models/types';
-import { ChefHat, Bath, Sofa, Bed, Home, Briefcase, Box, ArrowRight, Plus, Plug, DollarSign, TrendingUp, TrendingDown, AlertCircle } from 'lucide-react';
+import { ChefHat, Bath, Sofa, Bed, Home, Briefcase, Box, ArrowRight, Plus, Plug, DollarSign, TrendingUp, TrendingDown, AlertCircle, ClipboardCheck, Clock, CheckCircle2, FileText } from 'lucide-react';
 import { PhotoCapture } from './PhotoCapture';
 import { useAppContext } from '../core/hooks/useAppContext';
+import { Inspection } from '../core/models/inspections';
+import { InspectionService } from '../core/services/InspectionService';
 
 interface DashboardProps {
   rooms: Room[];
   products: CatalogItem[];
   onSelectRoom: (roomId: string) => void;
   onAddRoom: () => void;
+  onViewInspections: () => void;
 }
 
 const IconMap: Record<string, any> = {
   ChefHat, Bath, Sofa, Bed, Home, Briefcase, Box, Plug
 };
 
-export const Dashboard: React.FC<DashboardProps> = ({ rooms, products, onSelectRoom, onAddRoom }) => {
-  const { flags } = useAppContext();
+export const Dashboard: React.FC<DashboardProps> = ({ rooms, products, onSelectRoom, onAddRoom, onViewInspections }) => {
+  const { org, flags } = useAppContext();
+  const [recentInspections, setRecentInspections] = useState<Inspection[]>([]);
+  const [isLoadingInspections, setIsLoadingInspections] = useState(false);
+
+  useEffect(() => {
+    if (org) {
+      loadRecentInspections();
+    }
+  }, [org]);
+
+  const loadRecentInspections = async () => {
+    if (!org) return;
+    setIsLoadingInspections(true);
+    try {
+      const all = await InspectionService.listInspections(org.id);
+      setRecentInspections(all.slice(0, 3));
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoadingInspections(false);
+    }
+  };
+
   const getProductCount = (roomId: string) => products.filter(p => p.roomId === roomId).length;
   
   const getRoomFinancials = (roomId: string) => {
@@ -147,6 +172,73 @@ export const Dashboard: React.FC<DashboardProps> = ({ rooms, products, onSelectR
       {flags?.offline_mode && (
         <PhotoCapture />
       )}
+
+      {/* Recent Inspections Section */}
+      <div className="mt-12">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+            <ClipboardCheck size={24} className="text-lowes-blue" />
+            Recent Inspections
+          </h2>
+          <button 
+            onClick={onViewInspections}
+            className="text-sm font-semibold text-lowes-blue hover:underline flex items-center gap-1"
+          >
+            View All <ArrowRight size={16} />
+          </button>
+        </div>
+
+        {isLoadingInspections ? (
+          <div className="flex items-center justify-center p-12 bg-white rounded-2xl border border-slate-200">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-lowes-blue"></div>
+          </div>
+        ) : recentInspections.length === 0 ? (
+          <div className="bg-white p-8 rounded-2xl border border-dashed border-slate-300 text-center text-slate-400">
+            <p className="mb-4">No inspections recorded yet.</p>
+            <button 
+              onClick={onViewInspections}
+              className="px-6 py-2 bg-lowes-blue text-white rounded-lg font-semibold text-sm hover:bg-lowes-hover transition-all"
+            >
+              Start First Inspection
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {recentInspections.map(inspection => (
+              <div 
+                key={inspection.id}
+                onClick={onViewInspections}
+                className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-all cursor-pointer"
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <div className={`p-2 rounded-lg ${
+                    inspection.status === 'completed' ? 'bg-green-50 text-green-600' : 
+                    inspection.status === 'in_progress' ? 'bg-blue-50 text-blue-600' : 
+                    'bg-slate-50 text-slate-500'
+                  }`}>
+                    {inspection.status === 'completed' ? <CheckCircle2 size={20} /> : <Clock size={20} />}
+                  </div>
+                  <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded ${
+                    inspection.status === 'completed' ? 'bg-green-100 text-green-700' : 
+                    inspection.status === 'in_progress' ? 'bg-blue-100 text-blue-700' : 
+                    'bg-slate-100 text-slate-600'
+                  }`}>
+                    {inspection.status.replace('_', ' ')}
+                  </span>
+                </div>
+                <h3 className="font-bold text-slate-800 mb-1 truncate">{inspection.title}</h3>
+                <div className="flex items-center gap-3 text-xs text-slate-400">
+                  <span className="flex items-center gap-1">
+                    <FileText size={12} /> {inspection.photoIds?.length || 0} Photos
+                  </span>
+                  <span>•</span>
+                  <span>{new Date(inspection.updatedAt).toLocaleDateString()}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

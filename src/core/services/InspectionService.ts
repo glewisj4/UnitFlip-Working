@@ -39,6 +39,7 @@ export const InspectionService = {
       createdByUserId: userId,
       lastEditedByUserId: userId,
       photoIds: [],
+      productIds: [],
     };
 
     inspections.push(newInspection);
@@ -82,7 +83,7 @@ export const InspectionService = {
       if (i.id === inspectionId) {
         return {
           ...i,
-          photoIds: [...i.photoIds, photoId],
+          photoIds: [...(i.photoIds || []), photoId],
           updatedAt: Date.now(),
           lastEditedByUserId: userId
         };
@@ -98,6 +99,44 @@ export const InspectionService = {
         userId,
         payload: { inspectionId, photoId }
     });
+  },
+
+  async addProduct(orgId: string, inspectionId: string, productId: string, userId: string): Promise<void> {
+    const key = `${STORAGE_KEY_PREFIX}${orgId}`;
+    const inspections = (await adapter.getItem<Inspection[]>(key)) || [];
+    
+    const updatedInspections = inspections.map((i) => {
+      if (i.id === inspectionId) {
+        return {
+          ...i,
+          productIds: [...(i.productIds || []), productId],
+          updatedAt: Date.now(),
+          lastEditedByUserId: userId
+        };
+      }
+      return i;
+    });
+    
+    await adapter.setItem(key, updatedInspections);
+  },
+
+  async removeProduct(orgId: string, inspectionId: string, productId: string, userId: string): Promise<void> {
+    const key = `${STORAGE_KEY_PREFIX}${orgId}`;
+    const inspections = (await adapter.getItem<Inspection[]>(key)) || [];
+    
+    const updatedInspections = inspections.map((i) => {
+      if (i.id === inspectionId) {
+        return {
+          ...i,
+          productIds: (i.productIds || []).filter(id => id !== productId),
+          updatedAt: Date.now(),
+          lastEditedByUserId: userId
+        };
+      }
+      return i;
+    });
+    
+    await adapter.setItem(key, updatedInspections);
   },
 
   async removePhoto(orgId: string, inspectionId: string, photoId: string, userId: string): Promise<void> {
