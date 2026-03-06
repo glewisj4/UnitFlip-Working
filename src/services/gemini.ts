@@ -1,8 +1,19 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Tier } from "../core/models/types";
 
-// Initialize Gemini Client
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Lazy initialization of Gemini Client
+let ai: GoogleGenAI | null = null;
+
+const getAIClient = (): GoogleGenAI => {
+  if (!ai) {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY environment variable is not set");
+    }
+    ai = new GoogleGenAI({ apiKey });
+  }
+  return ai;
+};
 
 export interface AISuggestedProduct {
   name: string;
@@ -27,6 +38,7 @@ export interface ParsedCartItem {
 
 export const parseCartText = async (text: string): Promise<ParsedCartItem[]> => {
   try {
+    const ai = getAIClient();
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: `Analyze the following text which is a copy-paste from a Lowe's shopping cart or product list. 
@@ -85,6 +97,7 @@ export const parseCartText = async (text: string): Promise<ParsedCartItem[]> => 
 
 export const generateRoomProducts = async (roomName: string): Promise<AISuggestedProduct[]> => {
   try {
+    const ai = getAIClient();
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: `Generate a list of 5 essential maintenance/replacement products for a rental unit's "${roomName}". 
