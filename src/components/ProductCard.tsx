@@ -89,8 +89,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onUpdate, onD
             <div className="flex-1 mr-4">
                 <input 
                     type="text" 
-                    value={product.name}
-                    onChange={(e) => updateDetails('name', e.target.value)}
+                    value={product.title || product.name}
+                    onChange={(e) => onUpdate({ ...product, title: e.target.value, name: e.target.value })}
                     className="text-lg font-bold text-slate-800 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-lowes-blue focus:outline-none w-full mb-1"
                 />
                 <input 

@@ -76,7 +76,7 @@ export const BundleSuggestionsModal: React.FC<BundleSuggestionsModalProps> = ({
             </h2>
             <p className="text-sm text-slate-500 mt-1">
               {mode === 'preview' ? 'Testing rules for ' : 'Suggestions for '}
-              <span className="font-semibold text-slate-700">{triggerItem.name}</span>
+              <span className="font-semibold text-slate-700">{triggerItem.title || triggerItem.name}</span>
             </p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
@@ -126,7 +126,7 @@ export const BundleSuggestionsModal: React.FC<BundleSuggestionsModalProps> = ({
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <h4 className="font-semibold text-slate-900 truncate">{item.name}</h4>
+                      <h4 className="font-semibold text-slate-900 truncate">{item.title || item.name}</h4>
                       {companion.required && (
                         <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold uppercase rounded">Required</span>
                       )}

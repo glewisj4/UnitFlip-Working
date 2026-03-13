@@ -30,8 +30,8 @@ export const ProductInstanceService = {
       ...instance,
       id: createId(),
       orgId,
-      addedAt: Date.now(),
-      updatedAt: Date.now(),
+      addedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     instances.push(newInstance);
     await this.saveInstances(orgId, instances);
@@ -46,7 +46,7 @@ export const ProductInstanceService = {
     const updated = {
       ...instances[index],
       ...updates,
-      updatedAt: Date.now(),
+      updatedAt: new Date().toISOString(),
     };
     instances[index] = updated;
     await this.saveInstances(orgId, instances);

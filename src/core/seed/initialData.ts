@@ -1,4 +1,5 @@
 import { AppState, CatalogItem, ProductStatus, Tier, RepairTemplate } from '../models/types';
+import { normalizeTitle } from '../../utils/normalizeTitle';
 
 // Default Templates Data
 export const DEFAULT_REPAIR_TEMPLATES: RepairTemplate[] = [
@@ -80,14 +81,17 @@ const CSV_ITEMS = [
 const electricalProducts: CatalogItem[] = CSV_ITEMS.map((item, index) => ({
   id: `elec-${index}`,
   orgId: 'default-org',
+  title: `${item.type} (${item.sub})`,
+  normalizedTitle: normalizeTitle(`${item.type} (${item.sub})`),
   name: `${item.type} (${item.sub})`,
   description: `Standard ${item.type} replacement`,
   tags: ['Electrical'],
   defaultQty: 1,
   unit: 'ea',
   defaultTier: Tier.STANDARD,
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
+  isActive: true,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
   options: [{
     id: `opt-${index}`,
     name: item.name,
@@ -120,7 +124,10 @@ const INITIAL_DATA: AppState = {
     {
       id: 'prod-1',
       orgId: 'default-org',
+      title: 'Kitchen Faucet',
+      normalizedTitle: normalizeTitle('Kitchen Faucet'),
       name: 'Kitchen Faucet',
+      isActive: true,
       categoryId: 'cat-plumbing',
       categoryName: 'Plumbing',
       description: 'Single handle pull-down sprayer',
@@ -128,8 +135,8 @@ const INITIAL_DATA: AppState = {
       defaultQty: 1,
       unit: 'ea',
       defaultTier: Tier.STANDARD,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       options: [
         {
           id: 'opt-1',
@@ -161,14 +168,14 @@ const INITIAL_DATA: AppState = {
       tags: ['Electrical'],
       defaultQty: p.quantity || 1,
       defaultTier: Tier.STANDARD,
-      updatedAt: Date.now()
+      updatedAt: new Date().toISOString()
     }))
   ],
   repairTemplates: DEFAULT_REPAIR_TEMPLATES,
   categories: [
-    { id: 'cat-electrical', orgId: 'default-org', name: 'Electrical', sortOrder: 0, createdAt: Date.now(), updatedAt: Date.now() },
-    { id: 'cat-plumbing', orgId: 'default-org', name: 'Plumbing', sortOrder: 1, createdAt: Date.now(), updatedAt: Date.now() },
-    { id: 'cat-paint', orgId: 'default-org', name: 'Paint', sortOrder: 2, createdAt: Date.now(), updatedAt: Date.now() },
+    { id: 'cat-electrical', orgId: 'default-org', name: 'Electrical', sortOrder: 0, isActive: true, path: '/cat-electrical', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'cat-plumbing', orgId: 'default-org', name: 'Plumbing', sortOrder: 1, isActive: true, path: '/cat-plumbing', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: 'cat-paint', orgId: 'default-org', name: 'Paint', sortOrder: 2, isActive: true, path: '/cat-paint', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
   ],
   bundleRules: []
 };

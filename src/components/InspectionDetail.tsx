@@ -467,7 +467,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
                 return (
                   <div key={instance.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
                     <div className="flex-1">
-                      <h4 className="font-semibold text-slate-800">{item?.name || 'Loading...'}</h4>
+                      <h4 className="font-semibold text-slate-800">{item?.title || item?.name || 'Loading...'}</h4>
                       <p className="text-xs text-slate-500">
                         {item?.options[0]?.sku && `SKU: ${item.options[0].sku}`}
                         {item?.options[0]?.price && ` • $${item.options[0].price.toFixed(2)}`}

@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { ImportBatch, StagedProduct } from '../../core/models/types';
 import { ImportService } from '../../core/services/ImportService';
 import { StagingService } from '../../core/services/StagingService';
+import { CategoryService } from '../../core/services/CategoryService';
 import { useAppContext } from '../../core/hooks/useAppContext';
-import { FileText, CheckCircle, XCircle, AlertTriangle, ChevronRight, Search, Filter, MoreVertical, Edit2, Trash2, Copy } from 'lucide-react';
+import { FileText, CheckCircle, XCircle, AlertTriangle, ChevronRight, Search, Filter, MoreVertical, Edit2, Trash2, Copy, Merge, FolderInput, Settings } from 'lucide-react';
+import { Category } from '../../core/models/types';
+import { CategoryManager } from '../Categories/CategoryManager';
 
 interface StagingAreaProps {
   onClose: () => void;
@@ -16,8 +19,30 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
   const [stagedProducts, setStagedProducts] = useState<StagedProduct[]>([]);
   const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<'ALL' | 'STAGED' | 'APPROVED' | 'REJECTED'>('STAGED');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'STAGED' | 'APPROVED' | 'REJECTED' | 'NEEDS_REVIEW'>('STAGED');
   const [searchTerm, setSearchTerm] = useState('');
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [assignCategoryModalOpen, setAssignCategoryModalOpen] = useState(false);
+  const [selectedCategoryForAssign, setSelectedCategoryForAssign] = useState<string>('');
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+
+  // Helper to flatten categories with depth for dropdown
+  const getFlattenedCategories = useCallback((cats: Category[], parentId: string | null = null, depth = 0): { id: string, name: string, depth: number }[] => {
+    const result: { id: string, name: string, depth: number }[] = [];
+    const children = cats
+      .filter(c => (c.parentId || null) === (parentId || null))
+      .sort((a, b) => a.sortOrder - b.sortOrder);
+    
+    for (const child of children) {
+      result.push({ id: child.id, name: child.name, depth });
+      result.push(...getFlattenedCategories(cats, child.id, depth + 1));
+    }
+    return result;
+  }, []);
+
+  const flattenedCategories = useMemo(() => {
+    return getFlattenedCategories(categories);
+  }, [categories, getFlattenedCategories]);
 
   const loadBatches = useCallback(async () => {
     if (!org) return;
@@ -30,27 +55,61 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
 
   const loadStagedProducts = useCallback(async () => {
     if (!selectedBatchId) return;
+    console.log("BATCH ID:", selectedBatchId);
     const products = await ImportService.listStagedProducts(selectedBatchId);
+    console.log("STAGED ITEMS:", products);
     setStagedProducts(products);
     setSelectedProductIds(new Set());
   }, [selectedBatchId]);
 
   useEffect(() => {
     loadBatches();
-  }, [loadBatches]);
+    if (org) {
+      CategoryService.getCategories(org.id).then(setCategories);
+    }
+  }, [loadBatches, org]);
 
   useEffect(() => {
     loadStagedProducts();
   }, [loadStagedProducts]);
 
+  const [createCategoryModalOpen, setCreateCategoryModalOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+
   const handleApprove = async (ids: string[]) => {
     if (!selectedBatchId || !org) return;
     setIsProcessing(true);
     try {
-      await StagingService.approve(org.id, selectedBatchId, ids);
+      const result = await StagingService.approve(org.id, selectedBatchId, ids);
+      
+      if (result.failed > 0) {
+        alert(`${result.approved} items approved.\n${result.failed} items skipped (missing category).\n\nErrors:\n${result.errors.join('\n')}`);
+      }
+      
       await loadStagedProducts();
     } catch (err) {
       console.error('Approval failed:', err);
+      alert('Approval failed. See console for details.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCreateCategory = async () => {
+    if (!org || !newCategoryName.trim()) return;
+    setIsProcessing(true);
+    try {
+      const newCat = await CategoryService.addCategory(org.id, newCategoryName.trim());
+      setCategories(prev => [...prev, newCat]);
+      setSelectedCategoryForAssign(newCat.id);
+      setCreateCategoryModalOpen(false);
+      setNewCategoryName('');
+      
+      // If we were in the middle of assigning, we just selected it.
+      // If this was triggered from the dropdown, the user can now click "Assign Category".
+    } catch (err) {
+      console.error('Failed to create category:', err);
+      alert('Failed to create category.');
     } finally {
       setIsProcessing(false);
     }
@@ -64,6 +123,34 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
       await loadStagedProducts();
     } catch (err) {
       console.error('Rejection failed:', err);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleAssignCategory = async () => {
+    if (!selectedBatchId || !selectedCategoryForAssign) return;
+    setIsProcessing(true);
+    try {
+      await StagingService.assignCategory(selectedBatchId, Array.from(selectedProductIds), selectedCategoryForAssign);
+      await loadStagedProducts();
+      setAssignCategoryModalOpen(false);
+      setSelectedCategoryForAssign('');
+    } catch (err) {
+      console.error('Category assignment failed:', err);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleMerge = async (item: StagedProduct) => {
+    if (!selectedBatchId || !item.duplicateTargetId || !org) return;
+    setIsProcessing(true);
+    try {
+      await StagingService.mergeToCatalogWithUpdate(org.id, selectedBatchId, item.id, item.duplicateTargetId);
+      await loadStagedProducts();
+    } catch (err) {
+      console.error('Merge failed:', err);
     } finally {
       setIsProcessing(false);
     }
@@ -94,7 +181,7 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
     // Optimistic update
     setStagedProducts(prev => prev.map(p => {
       if (p.id === editingId) {
-        return { ...p, ...editValues, lineTotal: (editValues.qty || 0) * (editValues.unitPrice || 0) };
+        return { ...p, ...editValues };
       }
       return p;
     }));
@@ -106,7 +193,7 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
     
     const updatedProducts = stagedProducts.map(p => {
       if (p.id === editingId) {
-        return { ...p, ...editValues, lineTotal: (editValues.qty || 0) * (editValues.unitPrice || 0) };
+        return { ...p, ...editValues };
       }
       return p;
     });
@@ -139,6 +226,43 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
 
   const selectedBatch = batches.find((b) => b.id === selectedBatchId);
 
+  const [pendingDeleteBatchId, setPendingDeleteBatchId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleDeleteBatch = (batchId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    console.log("DELETE CLICKED", batchId);
+    setDeleteError(null);
+    setPendingDeleteBatchId(batchId);
+  };
+
+  const confirmDelete = async () => {
+    if (!org || !pendingDeleteBatchId) return;
+    
+    console.log("DELETE CONFIRMED", pendingDeleteBatchId);
+    setIsProcessing(true);
+    setDeleteError(null);
+    try {
+      await ImportService.deleteImportBatch(org.id, pendingDeleteBatchId);
+      console.log("DELETE COMPLETE", pendingDeleteBatchId);
+      
+      await loadBatches();
+      
+      // If we deleted the currently selected batch, clear selection
+      if (selectedBatchId === pendingDeleteBatchId) {
+        setSelectedBatchId(null);
+        setStagedProducts([]);
+      }
+      
+      setPendingDeleteBatchId(null);
+    } catch (err: any) {
+      console.error('Delete failed:', err);
+      setDeleteError(err.message || 'Failed to delete batch');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[50] bg-slate-50 flex flex-col">
       {/* Header */}
@@ -150,6 +274,13 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
           <h1 className="text-xl font-bold text-slate-900">Import Staging Area</h1>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowCategoryManager(true)}
+            className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg font-bold text-sm hover:bg-slate-50 transition-colors flex items-center gap-2"
+          >
+            <Settings size={16} /> Manage Categories
+          </button>
+          
           {selectedProductIds.size > 0 && (
             <>
               <span className="text-sm text-slate-500 font-medium">{selectedProductIds.size} selected</span>
@@ -167,6 +298,13 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
               >
                 <XCircle size={16} /> Reject
               </button>
+              <button
+                onClick={() => setAssignCategoryModalOpen(true)}
+                disabled={isProcessing}
+                className="px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-lg font-bold text-sm hover:bg-slate-50 transition-colors flex items-center gap-2"
+              >
+                <FolderInput size={16} /> Assign Category
+              </button>
             </>
           )}
         </div>
@@ -180,31 +318,47 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
           </div>
           <div className="divide-y divide-slate-100">
             {batches.map((batch) => (
-              <button
+              <div
                 key={batch.id}
-                onClick={() => setSelectedBatchId(batch.id)}
-                className={`w-full text-left p-4 hover:bg-slate-50 transition-colors ${
+                className={`w-full text-left p-4 hover:bg-slate-50 transition-colors group relative ${
                   selectedBatchId === batch.id ? 'bg-blue-50 border-l-4 border-lowes-blue' : 'border-l-4 border-transparent'
                 }`}
+                onClick={() => setSelectedBatchId(batch.id)}
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-semibold text-slate-900 text-sm">
                     {batch.quoteNumber ? `Quote #${batch.quoteNumber}` : 'Unknown Quote'}
                   </span>
-                  <span className="text-[10px] text-slate-400">
-                    {new Date(batch.createdAt).toLocaleDateString()}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                        batch.status === 'FAILED' ? 'bg-red-100 text-red-700' :
+                        batch.status === 'APPROVED' ? 'bg-emerald-100 text-emerald-700' :
+                        'bg-slate-100 text-slate-500'
+                    }`}>
+                        {batch.status || 'STAGED'}
+                    </span>
+                    <button 
+                        type="button"
+                        onClick={(e) => handleDeleteBatch(batch.id, e)}
+                        className="relative z-10 p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Delete Batch"
+                    >
+                        <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-slate-500">
+                <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
+                  <span className="text-[10px]">{new Date(batch.createdAt).toLocaleDateString()}</span>
+                  <span>•</span>
                   <FileText size={12} />
-                  <span className="truncate max-w-[180px]">{batch.filename}</span>
+                  <span className="truncate max-w-[120px]">{batch.filename}</span>
                 </div>
                 {batch.estimatedTotal && (
-                  <div className="mt-2 text-xs font-bold text-slate-700">
+                  <div className="text-xs font-bold text-slate-700">
                     ${batch.estimatedTotal.toFixed(2)}
                   </div>
                 )}
-              </button>
+              </div>
             ))}
             {batches.length === 0 && (
               <div className="p-8 text-center text-slate-400 text-sm">No imports yet.</div>
@@ -216,7 +370,17 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
         <main className="flex-1 flex flex-col bg-slate-50 overflow-hidden">
           {/* Toolbar */}
           <div className="px-6 py-4 bg-white border-b border-slate-200 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4 flex-1">
+            <div className="flex flex-col gap-2 w-full">
+              {/* Debug Panel */}
+              <div className="text-xs font-mono bg-slate-100 p-2 rounded border border-slate-200 text-slate-500">
+                <div>Batch ID: {selectedBatchId}</div>
+                <div>Total Loaded: {stagedProducts.length}</div>
+                <div>Filtered Count: {filteredProducts.length}</div>
+                <div>Filter Status: {filterStatus}</div>
+                <div>Search Term: "{searchTerm}"</div>
+              </div>
+              
+              <div className="flex items-center gap-4 flex-1">
               <div className="relative flex-1 max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                 <input
@@ -238,9 +402,11 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
                   <option value="STAGED">Staged (Pending)</option>
                   <option value="APPROVED">Approved</option>
                   <option value="REJECTED">Rejected</option>
+                  <option value="NEEDS_REVIEW">Needs Review</option>
                 </select>
               </div>
             </div>
+          </div>
           </div>
 
           {/* Table */}
@@ -322,7 +488,7 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
                           </div>
                           <div>
                             <div className="font-medium text-slate-900 flex items-center gap-2">
-                               {item.rawTitle}
+                               {item.normalizedTitle || item.rawTitle}
                                {item.status === 'STAGED' && (
                                  <button onClick={() => handleEditStart(item)} className="opacity-0 group-hover/item:opacity-100 p-1 text-slate-400 hover:text-lowes-blue transition-opacity">
                                    <Edit2 size={12} />
@@ -386,7 +552,7 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
                         ) : `$${item.unitPrice?.toFixed(2) || '0.00'}`}
                       </td>
                       <td className="px-4 py-3 text-right font-bold text-slate-900">
-                        ${item.lineTotal?.toFixed(2) || '0.00'}
+                        ${((item.qty || 0) * (item.unitPrice || 0)).toFixed(2)}
                       </td>
                       <td className="px-4 py-3">
                         <span
@@ -395,6 +561,8 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
                               ? 'bg-emerald-100 text-emerald-800'
                               : item.status === 'REJECTED'
                               ? 'bg-red-100 text-red-800'
+                              : item.status === 'NEEDS_REVIEW'
+                              ? 'bg-orange-100 text-orange-800'
                               : 'bg-yellow-100 text-yellow-800'
                           }`}
                         >
@@ -405,6 +573,15 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
                         <div className="flex items-center justify-end gap-2">
                           {item.status === 'STAGED' && (
                             <>
+                              {item.duplicateCandidate && item.duplicateTargetId && (
+                                <button
+                                  onClick={() => handleMerge(item)}
+                                  className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
+                                  title="Merge Duplicate"
+                                >
+                                  <Merge size={16} />
+                                </button>
+                              )}
                               <button
                                 onClick={() => handleApprove([item.id])}
                                 className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
@@ -438,6 +615,138 @@ export const StagingArea: React.FC<StagingAreaProps> = ({ onClose }) => {
           </div>
         </main>
       </div>
+      {/* Assign Category Modal */}
+      {assignCategoryModalOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold text-slate-900 mb-4">Assign Category</h2>
+            <p className="text-sm text-slate-500 mb-4">
+              Select a category to assign to the {selectedProductIds.size} selected items.
+            </p>
+            
+            <select
+              className="w-full px-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-lowes-blue transition-all mb-6"
+              value={selectedCategoryForAssign}
+              onChange={(e) => {
+                if (e.target.value === 'NEW') {
+                  setCreateCategoryModalOpen(true);
+                } else if (e.target.value === 'MANAGE') {
+                  setAssignCategoryModalOpen(false);
+                  setShowCategoryManager(true);
+                } else {
+                  setSelectedCategoryForAssign(e.target.value);
+                }
+              }}
+            >
+              <option value="">Select a category...</option>
+              {flattenedCategories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {'\u00A0\u00A0'.repeat(cat.depth) + cat.name}
+                </option>
+              ))}
+              <option disabled>──────────</option>
+              <option value="NEW" className="font-bold text-blue-600">+ Add New Category</option>
+              <option value="MANAGE" className="font-bold text-slate-600">Manage Categories...</option>
+            </select>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setAssignCategoryModalOpen(false)}
+                className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-50 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAssignCategory}
+                disabled={!selectedCategoryForAssign || isProcessing}
+                className="px-6 py-2 bg-lowes-blue text-white font-bold rounded-lg hover:bg-lowes-hover shadow-lg shadow-blue-100 transition-all disabled:opacity-50"
+              >
+                Assign Category
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Create Category Modal */}
+      {createCategoryModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
+            <h2 className="text-xl font-bold text-slate-900 mb-4">Create New Category</h2>
+            
+            <input
+              type="text"
+              placeholder="Category Name"
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-lowes-blue transition-all mb-6"
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
+              autoFocus
+            />
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setCreateCategoryModalOpen(false)}
+                className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-50 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateCategory}
+                disabled={!newCategoryName.trim() || isProcessing}
+                className="px-6 py-2 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all disabled:opacity-50"
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Delete Confirmation Modal */}
+      {pendingDeleteBatchId && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+            <div className="flex items-center gap-3 text-red-600 mb-4">
+              <AlertTriangle size={24} />
+              <h2 className="text-xl font-bold">Delete Import?</h2>
+            </div>
+            <p className="text-slate-600 mb-6">
+              Are you sure you want to delete this import batch? This will remove all staged items associated with it. This action cannot be undone.
+            </p>
+            
+            {deleteError && (
+              <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-200">
+                {deleteError}
+              </div>
+            )}
+            
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setPendingDeleteBatchId(null)}
+                className="px-4 py-2 text-slate-600 font-bold hover:bg-slate-50 rounded-lg transition-colors"
+                disabled={isProcessing}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={isProcessing}
+                className="px-6 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 shadow-lg shadow-red-100 transition-all disabled:opacity-50 flex items-center gap-2"
+              >
+                {isProcessing ? 'Deleting...' : 'Delete Import'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Category Manager */}
+      {showCategoryManager && (
+        <CategoryManager onClose={() => {
+          setShowCategoryManager(false);
+          // Refresh categories when closing manager
+          if (org) CategoryService.getCategories(org.id).then(setCategories);
+        }} />
+      )}
     </div>
   );
 };

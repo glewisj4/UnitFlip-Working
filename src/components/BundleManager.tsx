@@ -27,7 +27,7 @@ export const BundleManager: React.FC<BundleManagerProps> = ({ triggerItem, rule:
   const filteredItems = useMemo(() => {
     return catalogItems.filter(i => 
       i.id !== triggerItem.id && 
-      i.name.toLowerCase().includes(searchTerm.toLowerCase()) &&
+      (i.title || i.name || '').toLowerCase().includes(searchTerm.toLowerCase()) &&
       !rule.companions.some(c => c.catalogItemId === i.id)
     ).slice(0, 5);
   }, [catalogItems, searchTerm, rule.companions, triggerItem.id]);
@@ -64,7 +64,7 @@ export const BundleManager: React.FC<BundleManagerProps> = ({ triggerItem, rule:
         <header className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
           <div>
             <h2 className="text-xl font-bold text-slate-900">Bundle Rules</h2>
-            <p className="text-sm text-slate-500">When adding <span className="font-semibold">{triggerItem.name}</span>, suggest these items:</p>
+            <p className="text-sm text-slate-500">When adding <span className="font-semibold">{triggerItem.title || triggerItem.name}</span>, suggest these items:</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
             <X size={20} className="text-slate-400" />
@@ -103,7 +103,7 @@ export const BundleManager: React.FC<BundleManagerProps> = ({ triggerItem, rule:
                       <Package size={20} className="text-slate-400" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-slate-900 truncate">{item.name}</p>
+                      <p className="font-semibold text-slate-900 truncate">{item.title || item.name}</p>
                       <div className="flex items-center gap-3 mt-1">
                         <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
                           <input 
@@ -154,7 +154,7 @@ export const BundleManager: React.FC<BundleManagerProps> = ({ triggerItem, rule:
                       className="w-full flex items-center gap-3 p-3 hover:bg-slate-50 text-left transition-colors"
                     >
                       <Package size={16} className="text-slate-400" />
-                      <span className="text-sm font-medium text-slate-700">{item.name}</span>
+                      <span className="text-sm font-medium text-slate-700">{item.title || item.name}</span>
                     </button>
                   ))}
                 </div>

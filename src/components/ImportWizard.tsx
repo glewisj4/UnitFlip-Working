@@ -3,6 +3,7 @@ import { ArrowLeft, Upload, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { Room, CatalogItem, ProductStatus, Tier } from '../core/models/types';
 import { parseCartText, ParsedCartItem } from '../services/gemini';
 import { createId } from '../services/storage';
+import { normalizeTitle } from '../utils/normalizeTitle';
 
 interface ImportWizardProps {
   rooms: Room[];
@@ -53,6 +54,8 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ rooms, onAddProduct,
       const newProduct: CatalogItem = {
         id: createId(),
         orgId: 'default-org',
+        title: item.name,
+        normalizedTitle: normalizeTitle(item.name),
         name: item.name,
         roomId: item.selectedRoomId,
         category: item.selectedCategory,
@@ -64,8 +67,9 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ rooms, onAddProduct,
         tags: [item.selectedCategory],
         defaultQty: 1,
         defaultTier: Tier.STANDARD,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         options: [
           {
             id: createId(),

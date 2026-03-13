@@ -30,30 +30,60 @@ export interface Category {
   id: string;
   orgId: string;
   name: string;
+  parentId?: string | null;
+  path?: string;
+  sortOrder: number;
+  isActive: boolean;
+  createdAt: string; // ISO
+  updatedAt: string; // ISO
+  
+  // Legacy fields for backward compatibility during migration
   parentCategoryId?: string | null;
   color?: string;
   icon?: string;
-  sortOrder: number;
-  createdAt: number;
-  updatedAt: number;
 }
 
 export interface CatalogItem {
   id: string;
   orgId: string;
-  name: string;
+  
+  title: string;
+  normalizedTitle: string;
+  
+  itemNumber?: string;
+  modelNumber?: string;
+  brand?: string;
+  
   categoryId?: string;
   categoryName?: string; // Denormalized for quick access
-  description?: string;
-  tags: string[];
-  defaultQty: number;
-  unit: string;
-  defaultTier: Tier;
-  options: ProductOption[];
-  createdAt: number;
-  updatedAt: number;
   
+  defaultPrice?: number;
+  priceSource?: string;
+  
+  imageUrl?: string;
+  
+  description?: string;
+  tags?: string[];
+  
+  isActive: boolean;
+  
+  source?: string;
+  sourceRef?: string;
+  
+  createdAt: string; // ISO
+  updatedAt: string; // ISO
+  createdBy?: string;
+  updatedBy?: string;
+  
+  lastVerifiedAt?: string;
+  notes?: string;
+
   // Legacy fields for backward compatibility
+  name?: string;
+  defaultQty?: number;
+  unit?: string;
+  defaultTier?: Tier;
+  options?: ProductOption[];
   roomId?: string;
   category?: string;
   status?: ProductStatus;
@@ -93,8 +123,8 @@ export interface ProductInstance {
   selectedOptionId?: string;
   status: ProductStatus;
   notes?: string;
-  addedAt: number;
-  updatedAt: number;
+  addedAt: string; // ISO
+  updatedAt: string; // ISO
 }
 
 export interface Room {
@@ -128,10 +158,13 @@ export interface AppState {
   repairTemplates: RepairTemplate[];
 }
 
+export type ImportBatchStatus = 'PARSING' | 'FAILED' | 'STAGED' | 'APPROVED' | 'DELETED';
+
 export interface ImportBatch {
   id: string;
   orgId: string;
   source: 'LOWES_QUOTE_PDF';
+  status: ImportBatchStatus;
   quoteNumber: string | null;
   storeNumber: string | null;
   createdDate: string | null; // ISO date
@@ -144,7 +177,7 @@ export interface ImportBatch {
   createdBy: string | null;
 }
 
-export type StagedProductStatus = 'STAGED' | 'APPROVED' | 'MERGED' | 'REJECTED';
+export type StagedProductStatus = 'STAGED' | 'APPROVED' | 'MERGED' | 'REJECTED' | 'NEEDS_REVIEW';
 
 export interface StagedProduct {
   id: string;
@@ -155,11 +188,9 @@ export interface StagedProduct {
   normalizedTitle: string;
   itemNumber: string | null;
   modelNumber: string | null;
-  fulfillment: string | null;
   type: string | null;
   unitPrice: number | null;
   qty: number | null;
-  lineTotal: number | null;
   status: StagedProductStatus;
   suggestedCategoryId: string | null;
   approvedCatalogItemId: string | null;

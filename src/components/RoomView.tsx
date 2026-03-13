@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Room, CatalogItem, ProductOption, Tier, ProductStatus, RepairTemplate } from '../core/models/types';
+import { normalizeTitle } from '../utils/normalizeTitle';
 import { ProductCard } from './ProductCard';
 import { createId, REPAIR_TEMPLATES } from '../services/storage';
 import { generateRoomProducts } from '../services/gemini';
@@ -64,14 +65,17 @@ export const RoomView: React.FC<RoomViewProps> = ({
         const newProd: CatalogItem = {
             id: createId(),
             orgId: 'default-org',
+            title: suggestion.name,
+            normalizedTitle: normalizeTitle(suggestion.name),
             name: suggestion.name,
             description: suggestion.description,
             tags: [],
             defaultQty: 1,
             unit: 'ea',
             defaultTier: Tier.STANDARD,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            isActive: true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
             options: suggestion.suggestedOptions.map(opt => ({
                 id: createId(),
                 name: opt.name,
@@ -92,14 +96,17 @@ export const RoomView: React.FC<RoomViewProps> = ({
         const newProd: CatalogItem = {
             id: createId(),
             orgId: 'default-org',
+            title: item.name,
+            normalizedTitle: normalizeTitle(item.name),
             name: item.name,
             description: item.description,
             tags: ['Repair Kit'],
             defaultQty: 1,
             unit: 'ea',
             defaultTier: item.tier,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            isActive: true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
             options: [{
                 id: createId(),
                 name: `Standard ${item.name}`,
@@ -119,14 +126,17 @@ export const RoomView: React.FC<RoomViewProps> = ({
     const newProd: CatalogItem = {
         id: createId(),
         orgId: 'default-org',
+        title: newProductName,
+        normalizedTitle: normalizeTitle(newProductName),
         name: newProductName,
         description: 'New item',
         tags: [],
         defaultQty: 1,
         unit: 'ea',
         defaultTier: Tier.STANDARD,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        isActive: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         options: []
     };
     onAddProduct(newProd);
@@ -159,8 +169,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
       
       switch (sortBy) {
         case 'name':
-          valA = a.name.toLowerCase();
-          valB = b.name.toLowerCase();
+          valA = (a.title || a.name).toLowerCase();
+          valB = (b.title || b.name).toLowerCase();
           break;
         case 'price':
           // Prioritize actual cost, fallback to standard option price or 0
@@ -171,8 +181,8 @@ export const RoomView: React.FC<RoomViewProps> = ({
           break;
         case 'date':
         default:
-          valA = a.createdAt || 0;
-          valB = b.createdAt || 0;
+          valA = a.createdAt || '';
+          valB = b.createdAt || '';
           break;
       }
 

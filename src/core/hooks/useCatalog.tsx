@@ -58,7 +58,7 @@ export const CatalogProvider: React.FC<{ children: React.ReactNode }> = ({ child
       listRef,
       catalogItemId: item.id,
       qty,
-      unit: item.unit,
+      unit: item.unit || 'ea',
       status: ProductStatus.PLANNING,
     });
 
