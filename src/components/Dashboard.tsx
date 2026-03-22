@@ -5,6 +5,10 @@ import { PhotoCapture } from './PhotoCapture';
 import { useAppContext } from '../core/hooks/useAppContext';
 import { Inspection } from '../core/models/inspections';
 import { InspectionService } from '../core/services/InspectionService';
+import { FindingService } from '../core/services/FindingService';
+import { RepairTaskService } from '../core/services/RepairTaskService';
+import { MaterialRequirementService } from '../core/services/MaterialRequirementService';
+import { createInspectionOperationalSummary } from '../core/services/InspectionReportSnapshotService';
 
 interface DashboardProps {
   rooms: Room[];
@@ -22,6 +26,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ rooms, products, onSelectR
   const { org, flags } = useAppContext();
   const [recentInspections, setRecentInspections] = useState<Inspection[]>([]);
   const [isLoadingInspections, setIsLoadingInspections] = useState(false);
+  const [portfolioSummary, setPortfolioSummary] = useState({
+    inspectionCount: 0,
+    readyCount: 0,
+    notReadyCount: 0,
+    unresolvedChecklistIssues: 0,
+    findingsCount: 0,
+    openRepairTasks: 0,
+    openMaterialRequirements: 0,
+    procurementReadyCount: 0,
+    outstandingRequirementQuantity: 0,
+  });
 
   useEffect(() => {
     if (org) {
@@ -35,6 +50,39 @@ export const Dashboard: React.FC<DashboardProps> = ({ rooms, products, onSelectR
     try {
       const all = await InspectionService.listInspections(org.id);
       setRecentInspections(all.slice(0, 3));
+      const [findings, tasks, materials] = await Promise.all([
+        FindingService.listFindings(org.id),
+        RepairTaskService.listTasks(org.id),
+        MaterialRequirementService.listRequirements(org.id),
+      ]);
+
+      const inspectionSummaries = all.map((inspection) =>
+        createInspectionOperationalSummary(
+          inspection,
+          findings.filter((finding) => finding.inspectionId === inspection.id),
+          tasks.filter((task) => task.inspectionId === inspection.id),
+          materials.filter((material) => material.inspectionId === inspection.id)
+        )
+      );
+
+      setPortfolioSummary({
+        inspectionCount: all.length,
+        readyCount: inspectionSummaries.filter((summary) => summary.scopeReadiness.stage === 'ready_for_report').length,
+        notReadyCount: inspectionSummaries.filter((summary) => summary.scopeReadiness.stage !== 'ready_for_report').length,
+        unresolvedChecklistIssues: inspectionSummaries.reduce(
+          (sum, summary) => sum + summary.checklist.unresolvedCount,
+          0
+        ),
+        findingsCount: findings.length,
+        openRepairTasks: tasks.filter((task) => task.status !== 'done').length,
+        openMaterialRequirements: materials.filter((material) => !['fulfilled', 'canceled'].includes(material.status)).length,
+        procurementReadyCount: materials.filter((material) =>
+          ['reviewed', 'planned', 'quoted', 'ordered'].includes(material.status)
+        ).length,
+        outstandingRequirementQuantity: materials
+          .filter((material) => !['fulfilled', 'canceled'].includes(material.status))
+          .reduce((sum, material) => sum + material.quantity, 0),
+      });
     } catch (e) {
       console.error(e);
     } finally {
@@ -92,6 +140,43 @@ export const Dashboard: React.FC<DashboardProps> = ({ rooms, products, onSelectR
                 <p className="text-sm text-slate-500 font-medium uppercase">Variance</p>
                 <p className={`text-2xl font-bold ${varianceColor}`}>${totalVariance.toLocaleString()}</p>
             </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800">Portfolio Rollups</h2>
+            <p className="text-sm text-slate-500">Readiness, open scope, and procurement demand across inspections.</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Inspections</div>
+            <div className="text-2xl font-bold text-slate-800 mt-1">{portfolioSummary.inspectionCount}</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {portfolioSummary.readyCount} ready • {portfolioSummary.notReadyCount} not ready
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Checklist Issues</div>
+            <div className="text-2xl font-bold text-amber-700 mt-1">{portfolioSummary.unresolvedChecklistIssues}</div>
+            <div className="text-xs text-slate-500 mt-1">Unresolved failed or blocked items</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Open Scope</div>
+            <div className="text-2xl font-bold text-slate-800 mt-1">{portfolioSummary.findingsCount}</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {portfolioSummary.openRepairTasks} open tasks • {portfolioSummary.openMaterialRequirements} open materials
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Procurement Demand</div>
+            <div className="text-2xl font-bold text-lowes-blue mt-1">{portfolioSummary.outstandingRequirementQuantity}</div>
+            <div className="text-xs text-slate-500 mt-1">
+              {portfolioSummary.procurementReadyCount} requirements ready for procurement
+            </div>
+          </div>
         </div>
       </div>
 
@@ -184,7 +269,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ rooms, products, onSelectR
             onClick={onViewInspections}
             className="text-sm font-semibold text-lowes-blue hover:underline flex items-center gap-1"
           >
-            View All <ArrowRight size={16} />
+            Open Inspection <ArrowRight size={16} />
           </button>
         </div>
 
@@ -199,7 +284,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ rooms, products, onSelectR
               onClick={onViewInspections}
               className="px-6 py-2 bg-lowes-blue text-white rounded-lg font-semibold text-sm hover:bg-lowes-hover transition-all"
             >
-              Start First Inspection
+              Start Inspection
             </button>
           </div>
         ) : (

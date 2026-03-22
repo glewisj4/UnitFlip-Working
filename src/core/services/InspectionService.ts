@@ -2,9 +2,20 @@ import { createLocalDbAdapter } from '../adapters/createLocalDbAdapter';
 import { Inspection } from '../models/inspections';
 import { createId } from '../../services/storage';
 import { SyncQueueService } from './SyncQueueService';
+import {
+  GeneratedInspectionItem,
+  GeneratedInspectionSection,
+  InspectionTemplateSnapshot,
+} from '../models/templates';
 
 const STORAGE_KEY_PREFIX = 'unitflip_inspections_v1:';
 const adapter = createLocalDbAdapter();
+
+interface CreateInspectionOptions {
+  templateSnapshot?: InspectionTemplateSnapshot;
+  generatedSections?: GeneratedInspectionSection[];
+  generatedItems?: GeneratedInspectionItem[];
+}
 
 export const InspectionService = {
   async listInspections(orgId: string, unitId?: string): Promise<Inspection[]> {
@@ -23,7 +34,8 @@ export const InspectionService = {
     orgId: string,
     unitId: string,
     title: string,
-    userId: string
+    userId: string,
+    options?: CreateInspectionOptions
   ): Promise<Inspection> {
     const key = `${STORAGE_KEY_PREFIX}${orgId}`;
     const inspections = (await adapter.getItem<Inspection[]>(key)) || [];
@@ -40,6 +52,9 @@ export const InspectionService = {
       lastEditedByUserId: userId,
       photoIds: [],
       productIds: [],
+      templateSnapshot: options?.templateSnapshot,
+      generatedSections: options?.generatedSections || [],
+      generatedItems: options?.generatedItems || [],
     };
 
     inspections.push(newInspection);

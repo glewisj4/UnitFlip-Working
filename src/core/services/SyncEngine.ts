@@ -145,6 +145,24 @@ export class SyncEngine {
         case 'UPSERT_INSPECTION':
           await this.remote.upsertInspection(this.orgId, op.payload);
           break;
+        case 'UPSERT_FINDING':
+          await this.remote.upsertFinding(this.orgId, op.payload);
+          break;
+        case 'DELETE_FINDING':
+          await this.remote.deleteFinding(this.orgId, op.payload.findingId as string);
+          break;
+        case 'UPSERT_REPAIR_TASK':
+          await this.remote.upsertRepairTask(this.orgId, op.payload);
+          break;
+        case 'DELETE_REPAIR_TASK':
+          await this.remote.deleteRepairTask(this.orgId, op.payload.repairTaskId as string);
+          break;
+        case 'UPSERT_MATERIAL_REQUIREMENT':
+          await this.remote.upsertMaterialRequirement(this.orgId, op.payload);
+          break;
+        case 'DELETE_MATERIAL_REQUIREMENT':
+          await this.remote.deleteMaterialRequirement(this.orgId, op.payload.materialRequirementId as string);
+          break;
         case 'ATTACH_PHOTO':
           await this.remote.attachPhoto(
             this.orgId, 

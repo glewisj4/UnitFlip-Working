@@ -9,7 +9,7 @@ export interface Org {
   name: string;
 }
 
-export type Role = 'admin' | 'manager' | 'contractor' | 'viewer';
+export type Role = 'admin' | 'manager' | 'contractor' | 'viewer' | 'developer';
 
 export type FeatureFlagKey = 
   | 'public_share_links'

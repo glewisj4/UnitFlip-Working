@@ -8,18 +8,23 @@ import { ProductManager } from './components/ProductManager';
 import { RepairKitManager } from './components/RepairKitManager';
 import { ImportWizard } from './components/ImportWizard';
 
-import { UnitList } from './components/UnitList';
 import { InspectionList } from './components/InspectionList';
 import { InspectionDetail } from './components/InspectionDetail';
 import { ShareLinkViewer } from './components/ShareLinkViewer';
 import { AdminRetentionPanel } from './components/AdminRetentionPanel';
+import { TemplateManager } from './components/TemplateManager';
+import { ProcurementWorkspace } from './components/ProcurementWorkspace';
+import { InspectionHome } from './components/InspectionHome';
+import { UnitManagement } from './components/UnitManagement';
+import { ClientCrashCapture, ErrorBoundary } from './components/ErrorBoundary';
+import { FeedbackManagement } from './pages/FeedbackManagement';
 
 import { CatalogProvider } from './core/hooks/useCatalog';
 import { AppState, CatalogItem, Room, RepairTemplate } from './core/models/types';
 import { getStoredData, saveData, createId } from './services/storage';
 
 import { useDebouncedCallback } from './core/hooks/useDebouncedCallback';
-import { AppContextProvider } from './core/hooks/useAppContext';
+import { AppContextProvider, useAppContext } from './core/hooks/useAppContext';
 import { useAuditLogger } from './core/hooks/useAuditLogger';
 import { SyncEngineProvider } from './core/hooks/useSyncEngine';
 
@@ -55,6 +60,7 @@ const AppContent: React.FC = () => {
   const [shareToken, setShareToken] = useState<string | null>(null);
 
   const { log } = useAuditLogger();
+  const { role } = useAppContext();
 
   // Load data on mount + detect share link
   useEffect(() => {
@@ -102,6 +108,12 @@ const AppContent: React.FC = () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [debouncedSave]);
+
+  useEffect(() => {
+    if (currentView === 'feedback-management' && role !== 'developer') {
+      setCurrentView('admin');
+    }
+  }, [currentView, role]);
 
   const handleRoomSelect = (roomId: string) => {
     setSelectedRoomId(roomId);
@@ -263,7 +275,18 @@ const AppContent: React.FC = () => {
 
     if (currentView === 'inspections') {
       if (selectedInspectionId) {
-        return <InspectionDetail inspectionId={selectedInspectionId} onBack={() => setSelectedInspectionId(null)} />;
+        return (
+          <ErrorBoundary
+            surfaceName="inspection-detail-page"
+            screenName="InspectionDetail"
+            contextIds={{ inspectionId: selectedInspectionId }}
+            resetKeys={[selectedInspectionId]}
+            onReturn={() => setSelectedInspectionId(null)}
+            returnLabel="Return to Inspection"
+          >
+            <InspectionDetail inspectionId={selectedInspectionId} onBack={() => setSelectedInspectionId(null)} />
+          </ErrorBoundary>
+        );
       }
       if (selectedUnitId) {
         return (
@@ -274,11 +297,56 @@ const AppContent: React.FC = () => {
           />
         );
       }
-      return <UnitList onSelectUnit={setSelectedUnitId} />;
+      return (
+        <InspectionHome
+          onSelectUnit={setSelectedUnitId}
+          onResumeInspection={(inspectionId) => {
+            setSelectedUnitId(null);
+            setSelectedInspectionId(inspectionId);
+          }}
+        />
+      );
+    }
+
+    if (currentView === 'unit-management') {
+      return (
+        <UnitManagement
+          onOpenInspection={(inspectionId) => {
+            setCurrentView('inspections');
+            setSelectedUnitId(null);
+            setSelectedInspectionId(inspectionId);
+          }}
+          onOpenUnitInspections={(unitId) => {
+            setCurrentView('inspections');
+            setSelectedInspectionId(null);
+            setSelectedUnitId(unitId);
+          }}
+        />
+      );
     }
     
     if (currentView === 'admin') {
-      return <AdminRetentionPanel />;
+      return (
+        <AdminRetentionPanel
+          onOpenFeedbackManagement={role === 'developer' ? () => setCurrentView('feedback-management') : undefined}
+        />
+      );
+    }
+
+    if (currentView === 'feedback-management') {
+      if (role !== 'developer') {
+        return <AdminRetentionPanel />;
+      }
+
+      return <FeedbackManagement onBack={() => setCurrentView('admin')} />;
+    }
+
+    if (currentView === 'templates') {
+      return <TemplateManager />;
+    }
+
+    if (currentView === 'procurement') {
+      return <ProcurementWorkspace />;
     }
 
     // Default to rooms/dashboard view logic
@@ -305,7 +373,7 @@ const AppContent: React.FC = () => {
         setCurrentView(tab);
         setSelectedRoomId(null);
 
-        // Reset inspection flow state when leaving inspections tab
+        // Reset inspection flow state when leaving the operational inspection tab.
         if (tab !== 'inspections') {
           setSelectedUnitId(null);
           setSelectedInspectionId(null);
@@ -316,7 +384,26 @@ const AppContent: React.FC = () => {
         }
       }}
     >
-      {renderContent()}
+      <ErrorBoundary
+        surfaceName="app-view-content"
+        screenName="AppContent"
+        contextIds={{
+          unitId: selectedUnitId || undefined,
+          inspectionId: selectedInspectionId || undefined,
+          roomId: selectedRoomId || undefined,
+        }}
+        resetKeys={[currentView, selectedUnitId, selectedInspectionId, selectedRoomId, activeCategory]}
+        onReturn={() => {
+          setCurrentView('dashboard');
+          setSelectedRoomId(null);
+          setSelectedUnitId(null);
+          setSelectedInspectionId(null);
+          setActiveCategory(null);
+        }}
+        returnLabel="Return to Dashboard"
+      >
+        {renderContent()}
+      </ErrorBoundary>
     </Layout>
   );
 };
@@ -326,7 +413,10 @@ const App: React.FC = () => {
     <AppContextProvider>
       <SyncEngineProvider>
         <CatalogProvider>
-          <AppContent />
+          <ClientCrashCapture screenName="App" />
+          <ErrorBoundary surfaceName="app-shell" screenName="AppShell" resetKeys={[window.location.pathname]}>
+            <AppContent />
+          </ErrorBoundary>
         </CatalogProvider>
       </SyncEngineProvider>
     </AppContextProvider>

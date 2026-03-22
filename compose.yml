@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_DEV_HOST: 0.0.0.0
+      VITE_DEV_PORT: 3000
+      VITE_DOCKER: "true"
+      VITE_API_PROXY_TARGET: http://host.docker.internal:4317
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0 --port 3000

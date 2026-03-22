@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.gitignore
+docs
+server
+supabase
+npm-debug.log*
+Dockerfile*
+compose*.yml
+.env
+.env.local
+.env.*.local

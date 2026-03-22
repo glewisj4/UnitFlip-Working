@@ -2,6 +2,7 @@ import { createLocalDbAdapter } from '../adapters/createLocalDbAdapter';
 import { ReportJob } from '../models/reports';
 import { createId } from '../../services/storage';
 import { SyncQueueService } from './SyncQueueService';
+import { InspectionReportSnapshotService } from './InspectionReportSnapshotService';
 
 const STORAGE_KEY_PREFIX = 'unitflip_reports_v1:';
 const adapter = createLocalDbAdapter();
@@ -27,6 +28,7 @@ export const ReportService = {
   }): Promise<ReportJob> {
     const key = `${STORAGE_KEY_PREFIX}${params.orgId}`;
     const reports = (await adapter.getItem<ReportJob[]>(key)) || [];
+    const snapshot = await InspectionReportSnapshotService.buildSnapshot(params.orgId, params.inspectionId);
     
     const newReport: ReportJob = {
       id: createId(),
@@ -37,6 +39,7 @@ export const ReportService = {
       updatedAt: Date.now(),
       status: 'queued',
       options: params.options,
+      snapshot: snapshot || undefined,
     };
 
     reports.push(newReport);

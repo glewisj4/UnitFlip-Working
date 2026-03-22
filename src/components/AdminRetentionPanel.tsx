@@ -9,7 +9,11 @@ import { ArchiveJob } from '../core/models/archive';
 import { AuditEvent } from '../core/models/audit';
 import { useAppContext } from '../core/hooks/useAppContext';
 
-export const AdminRetentionPanel: React.FC = () => {
+interface AdminRetentionPanelProps {
+  onOpenFeedbackManagement?: () => void;
+}
+
+export const AdminRetentionPanel: React.FC<AdminRetentionPanelProps> = ({ onOpenFeedbackManagement }) => {
   const { org, user, role } = useAppContext();
   const [policy, setPolicy] = useState<RetentionPolicy | null>(null);
   const [pending, setPending] = useState<PendingPurgeItem[]>([]);
@@ -20,15 +24,17 @@ export const AdminRetentionPanel: React.FC = () => {
   const [exportingIds, setExportingIds] = useState<Set<string>>(new Set());
   const [selectedVariants, setSelectedVariants] = useState<Record<string, 'full' | 'thumb'>>({});
   const [previews, setPreviews] = useState<Record<string, string>>({});
+  const isAdmin = role === 'admin';
+  const isDeveloper = role === 'developer';
 
   useEffect(() => {
-    if (org) {
+    if (org && isAdmin) {
       loadData();
     }
     return () => {
       Object.values(previews).forEach(url => URL.revokeObjectURL(url as string));
     };
-  }, [org]);
+  }, [org, isAdmin]);
 
   const loadData = async () => {
     if (!org) return;
@@ -174,12 +180,58 @@ export const AdminRetentionPanel: React.FC = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  if (role !== 'admin') {
+  if (!isAdmin && !isDeveloper) {
     return (
       <div className="p-8 text-center">
         <Shield size={48} className="mx-auto text-slate-300 mb-4" />
         <h2 className="text-xl font-bold text-slate-800">Admin Access Required</h2>
         <p className="text-slate-500">You do not have permission to view this panel.</p>
+      </div>
+    );
+  }
+
+  if (isDeveloper) {
+    return (
+      <div className="max-w-4xl mx-auto p-6 space-y-6">
+        <header className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Developer Tools</p>
+              <h1 className="mt-1 text-2xl font-bold text-slate-900">Retention &amp; Settings</h1>
+              <p className="mt-2 max-w-2xl text-sm text-slate-600">
+                Developer-only observability tools live here. Retention controls remain admin-scoped and are not exposed in this role.
+              </p>
+            </div>
+            {onOpenFeedbackManagement ? (
+              <button
+                type="button"
+                onClick={onOpenFeedbackManagement}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+              >
+                Open Feedback Management
+              </button>
+            ) : null}
+          </div>
+        </header>
+
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center gap-3">
+            <Shield size={18} className="text-slate-500" />
+            <h2 className="text-lg font-semibold text-slate-900">Feedback Management</h2>
+          </div>
+          <p className="mt-2 text-sm text-slate-600">
+            Review saved feedback, explore recent client logs, and inspect grouped issue signals without mutating any stored records.
+          </p>
+          {onOpenFeedbackManagement ? (
+            <button
+              type="button"
+              onClick={onOpenFeedbackManagement}
+              className="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700"
+            >
+              Open Console
+            </button>
+          ) : null}
+        </section>
       </div>
     );
   }

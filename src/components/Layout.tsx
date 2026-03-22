@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
-import { Home, Package, Settings, Hammer, ShoppingBag, Wrench, Menu, X, ClipboardList, RefreshCw, Wifi, WifiOff, Shield } from 'lucide-react';
+import { Home, Package, ShoppingBag, Wrench, Menu, X, ClipboardList, RefreshCw, Wifi, WifiOff, Shield, Layers3, ShoppingCart, MessageSquareWarning } from 'lucide-react';
 import { useSyncEngine } from '../core/hooks/useSyncEngine';
+import { useAppContext } from '../core/hooks/useAppContext';
+import { ClientLoggerService } from '../core/services/ClientLoggerService';
+import { FeedbackCategory, FeedbackService } from '../core/services/FeedbackService';
+import { FeedbackButton } from './FeedbackButton';
+import { FeedbackPanel } from './FeedbackPanel';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -10,11 +15,146 @@ interface LayoutProps {
 
 export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [feedbackCategory, setFeedbackCategory] = useState<FeedbackCategory>('bug');
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [includeDiagnostics, setIncludeDiagnostics] = useState(true);
+  const [includeContext, setIncludeContext] = useState(true);
+  const [feedbackSavedCount, setFeedbackSavedCount] = useState(() => FeedbackService.getFeedbackCount());
+  const [feedbackSubmitState, setFeedbackSubmitState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [feedbackSubmitMessage, setFeedbackSubmitMessage] = useState<string | undefined>(undefined);
   const { isOnline, isSyncing, lastSyncAt, triggerSyncNow } = useSyncEngine();
+  const { org, user, role } = useAppContext();
+  const viewLabels: Record<string, string> = {
+    dashboard: 'Dashboard',
+    rooms: 'Room Manager',
+    products: 'All Products',
+    'repair-kits': 'Repair Kits',
+    checklist: 'Checklist',
+    inspections: 'Inspection',
+    'unit-management': 'Unit Management',
+    procurement: 'Procurement',
+    templates: 'Templates',
+    admin: 'Retention & Settings',
+    'feedback-management': 'Feedback Management',
+  };
 
   const handleTabClick = (tab: string) => {
     onTabChange(tab);
     setIsMobileMenuOpen(false);
+  };
+
+  const buildFeedbackContext = () => ({
+    route: window.location.pathname || '/',
+    screen: activeTab,
+    activeTab,
+    isOnline,
+    isSyncing,
+    orgId: org?.id,
+    userId: user?.id,
+  });
+
+  const handleOpenFeedback = () => {
+    setFeedbackSubmitState('idle');
+    setFeedbackSubmitMessage(undefined);
+    setIsFeedbackOpen(true);
+    setFeedbackSavedCount(FeedbackService.getFeedbackCount());
+    ClientLoggerService.info('Feedback panel opened.', {
+      category: 'feedback',
+      eventType: 'feedback.panel_opened',
+      route: window.location.pathname || '/',
+      screen: activeTab,
+      contextIds: {
+        orgId: org?.id,
+        userId: user?.id,
+      },
+      metadata: {
+        activeTab,
+      },
+    });
+  };
+
+  const handleCloseFeedback = () => {
+    if (feedbackSubmitState === 'saving') return;
+    setIsFeedbackOpen(false);
+  };
+
+  const handleSubmitFeedback = () => {
+    if (!feedbackMessage.trim()) return;
+
+    setFeedbackSubmitState('saving');
+    setFeedbackSubmitMessage('Saving feedback locally...');
+
+    try {
+      const record = FeedbackService.saveFeedback({
+        category: feedbackCategory,
+        message: feedbackMessage,
+        includeContext,
+        includeDiagnostics,
+        context: buildFeedbackContext(),
+      });
+
+      setFeedbackSavedCount(FeedbackService.getFeedbackCount());
+      setFeedbackSubmitState('saved');
+      setFeedbackSubmitMessage('Feedback saved locally for review/export.');
+      setFeedbackMessage('');
+      setFeedbackCategory('bug');
+      setIncludeDiagnostics(true);
+      setIncludeContext(true);
+
+      ClientLoggerService.info('Feedback submitted.', {
+        category: 'feedback',
+        eventType: 'feedback.submitted',
+        route: window.location.pathname || '/',
+        screen: activeTab,
+        contextIds: {
+          orgId: org?.id,
+          userId: user?.id,
+        },
+        metadata: {
+          feedbackId: record.id,
+          feedbackCategory,
+          diagnosticsIncluded: includeDiagnostics,
+          contextIncluded: includeContext,
+        },
+      });
+    } catch (error) {
+      setFeedbackSubmitState('failed');
+      setFeedbackSubmitMessage('Saving feedback failed. Nothing was sent. Try again.');
+      ClientLoggerService.error('Feedback submission failed.', {
+        category: 'feedback',
+        eventType: 'feedback.submit_failed',
+        route: window.location.pathname || '/',
+        screen: activeTab,
+        contextIds: {
+          orgId: org?.id,
+          userId: user?.id,
+        },
+        metadata: {
+          feedbackCategory,
+          diagnosticsIncluded: includeDiagnostics,
+          contextIncluded: includeContext,
+          error,
+        },
+      });
+    }
+  };
+
+  const handleExportFeedback = () => {
+    FeedbackService.downloadFeedbackExport();
+    ClientLoggerService.info('Feedback export triggered.', {
+      category: 'feedback',
+      eventType: 'feedback.export_triggered',
+      route: window.location.pathname || '/',
+      screen: activeTab,
+      contextIds: {
+        orgId: org?.id,
+        userId: user?.id,
+      },
+      metadata: {
+        savedCount: FeedbackService.getFeedbackCount(),
+      },
+    });
   };
 
   return (
@@ -51,7 +191,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight">UnitFlip</h1>
-            <p className="text-xs text-slate-400">Inventory Manager</p>
+            <p className="text-xs text-slate-400">Inspection Operations</p>
           </div>
         </div>
         
@@ -81,7 +221,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
           </button>
 
           <div className="my-4 border-t border-slate-800"></div>
-          <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Database</p>
+          <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Catalog</p>
 
           <button
             onClick={() => handleTabClick('products')}
@@ -108,18 +248,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
           </button>
 
           <div className="my-4 border-t border-slate-800"></div>
-
-          <button
-            onClick={() => handleTabClick('checklist')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'checklist' 
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <Hammer size={20} />
-            <span className="font-medium">Inspection Mode</span>
-          </button>
+          <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Operations</p>
 
           <button
             onClick={() => handleTabClick('inspections')}
@@ -130,16 +259,55 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
             }`}
           >
             <ClipboardList size={20} />
-            <span className="font-medium">Inspections</span>
+            <span className="font-medium">Inspection</span>
+          </button>
+
+          <button
+            onClick={() => handleTabClick('procurement')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+              activeTab === 'procurement' 
+                ? 'bg-lowes-blue text-white' 
+                : 'text-slate-300 hover:bg-slate-800'
+            }`}
+          >
+            <ShoppingCart size={20} />
+            <span className="font-medium">Procurement</span>
+          </button>
+
+          <div className="my-4 border-t border-slate-800"></div>
+          <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Management</p>
+
+          <button
+            onClick={() => handleTabClick('unit-management')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+              activeTab === 'unit-management' 
+                ? 'bg-lowes-blue text-white' 
+                : 'text-slate-300 hover:bg-slate-800'
+            }`}
+          >
+            <Package size={20} />
+            <span className="font-medium">Unit Management</span>
           </button>
 
           <div className="my-4 border-t border-slate-800"></div>
           <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Admin</p>
 
           <button
+            onClick={() => handleTabClick('templates')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+              activeTab === 'templates' 
+                ? 'bg-lowes-blue text-white' 
+                : 'text-slate-300 hover:bg-slate-800'
+            }`}
+          >
+            <Layers3 size={20} />
+            <span className="font-medium">Templates</span>
+          </button>
+
+          <button
             onClick={() => handleTabClick('admin')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'admin' 
+              activeTab === 'admin' || activeTab === 'feedback-management'
                 ? 'bg-lowes-blue text-white' 
                 : 'text-slate-300 hover:bg-slate-800'
             }`}
@@ -147,6 +315,22 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
             <Shield size={20} />
             <span className="font-medium">Retention & Settings</span>
           </button>
+
+          {role === 'developer' ? (
+            <div className="px-4">
+              <button
+                onClick={() => handleTabClick('feedback-management')}
+                className={`w-full flex items-center gap-3 rounded-lg px-4 py-3 text-left transition-colors ${
+                  activeTab === 'feedback-management'
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                }`}
+              >
+                <MessageSquareWarning size={18} />
+                <span className="font-medium">Feedback Management</span>
+              </button>
+            </div>
+          ) : null}
 
           <div className="pt-8 px-4">
              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
@@ -171,7 +355,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
       <main className="flex-1 overflow-auto h-[calc(100vh-64px)] md:h-screen">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center sticky top-0 z-10 shadow-sm">
           <h2 className="text-2xl font-bold text-slate-800 capitalize">
-            {activeTab.replace('-', ' ')}
+            {viewLabels[activeTab] || activeTab.replace(/-/g, ' ')}
           </h2>
           <div className="flex items-center gap-4">
             {/* Sync Status Badge */}
@@ -207,6 +391,25 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
           {children}
         </div>
       </main>
+
+      <FeedbackButton onClick={handleOpenFeedback} />
+      <FeedbackPanel
+        isOpen={isFeedbackOpen}
+        category={feedbackCategory}
+        message={feedbackMessage}
+        includeDiagnostics={includeDiagnostics}
+        includeContext={includeContext}
+        savedCount={feedbackSavedCount}
+        submitState={feedbackSubmitState}
+        submitMessage={feedbackSubmitMessage}
+        onClose={handleCloseFeedback}
+        onCategoryChange={setFeedbackCategory}
+        onMessageChange={setFeedbackMessage}
+        onIncludeDiagnosticsChange={setIncludeDiagnostics}
+        onIncludeContextChange={setIncludeContext}
+        onSubmit={handleSubmitFeedback}
+        onExport={handleExportFeedback}
+      />
     </div>
   );
 };

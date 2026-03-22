@@ -9,6 +9,33 @@ const generateId = (): string => {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 };
 
+export const createPrefixedId = (prefix: string): string => {
+  return `${prefix}${generateId()}`;
+};
+
+export const createDeterministicPrefixedId = (
+  prefix: string,
+  parts: Array<string | number | null | undefined>
+): string => {
+  const normalized = parts
+    .filter((part): part is string | number => part !== null && part !== undefined)
+    .map((part) => String(part).trim().toLowerCase())
+    .join('|');
+
+  let hash = 2166136261;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  const slug = normalized
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'item';
+
+  return `${prefix}${slug}-${(hash >>> 0).toString(36)}`;
+};
+
 export const REPAIR_TEMPLATES = DEFAULT_REPAIR_TEMPLATES;
 
 const adapter = createLocalDbAdapter();

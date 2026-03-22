@@ -12,7 +12,7 @@ const adapter = createLocalDbAdapter();
 
 // We need to ensure the blob store exists. 
 const ensureBlobStore = async () => {
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
         const request = window.indexedDB.open('unitflip', 3); // Bump version to 3 for blobs
         request.onupgradeneeded = (event) => {
             const db = (event.target as IDBOpenDBRequest).result;
@@ -20,7 +20,12 @@ const ensureBlobStore = async () => {
                 db.createObjectStore(BLOB_STORE_NAME); 
             }
         };
-        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error || new Error('Failed to open photo storage.'));
+        request.onblocked = () => reject(new Error('Photo storage upgrade was blocked by another open UnitFlip session.'));
+        request.onsuccess = () => {
+            request.result.close();
+            resolve();
+        };
     });
 };
 
@@ -55,13 +60,18 @@ export const MediaService = {
     // Store Blobs
     const dbRequest = window.indexedDB.open('unitflip', 3);
     await new Promise<void>((resolve, reject) => {
+        dbRequest.onerror = () => reject(dbRequest.error || new Error('Failed to open photo blob storage.'));
+        dbRequest.onblocked = () => reject(new Error('Photo blob storage is blocked by another open UnitFlip session.'));
         dbRequest.onsuccess = (e) => {
             const db = (e.target as IDBOpenDBRequest).result;
             const tx = db.transaction([BLOB_STORE_NAME], 'readwrite');
             const store = tx.objectStore(BLOB_STORE_NAME);
             store.put(full.blob, fullKey);
             store.put(thumb.blob, thumbKey);
-            tx.oncomplete = () => resolve();
+            tx.oncomplete = () => {
+              db.close();
+              resolve();
+            };
             tx.onerror = () => reject(tx.error);
         };
     });
@@ -114,17 +124,28 @@ export const MediaService = {
             const getReq = store.get(key);
             getReq.onsuccess = () => {
                 if (getReq.result) {
+                    db.close();
                     resolve(getReq.result);
                 } else if (variant === 'full') {
                     // Fallback for legacy photos
                     const fallbackReq = store.get(photoId);
-                    fallbackReq.onsuccess = () => resolve(fallbackReq.result || null);
-                    fallbackReq.onerror = () => resolve(null);
+                    fallbackReq.onsuccess = () => {
+                      db.close();
+                      resolve(fallbackReq.result || null);
+                    };
+                    fallbackReq.onerror = () => {
+                      db.close();
+                      resolve(null);
+                    };
                 } else {
+                    db.close();
                     resolve(null);
                 }
             };
-            getReq.onerror = () => resolve(null);
+            getReq.onerror = () => {
+              db.close();
+              resolve(null);
+            };
         };
         request.onerror = () => resolve(null);
     });
@@ -161,7 +182,10 @@ export const MediaService = {
             store.delete(`photo:${params.photoId}:full`);
             store.delete(`photo:${params.photoId}:thumb`);
             store.delete(params.photoId); // Legacy
-            tx.oncomplete = () => resolve();
+            tx.oncomplete = () => {
+              db.close();
+              resolve();
+            };
         };
     });
   },

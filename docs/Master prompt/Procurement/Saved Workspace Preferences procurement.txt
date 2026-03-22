@@ -1,0 +1,85 @@
+Implement the next safe phase in H:\Dev\MyApps\unitflip.
+Phase name:
+Saved Workspace Preferences
+Current state:
+- H:\Dev\MyApps\unitflip is the sole source of truth.
+- npm run lint and npm run build currently pass locally and in Docker, and must remain passing.
+- Docker validation is part of the current development contract and must not be broken.
+- The procurement-intelligence and maintenance roadmap is complete, and current work is now focused on finish-quality ergonomics rather than new foundational capability.
+- ProcurementWorkspace already supports filtering, sorting, grouping, bulk refresh, refresh-health summary, maintenance digest, manual note visibility, and other stable read-only maintenance features.
+
+Validated Docker contract:
+- docker build --no-cache -t unitflip:dev .
+- docker build --no-cache --target lint -t unitflip:lint .
+- docker build --no-cache --target build -t unitflip:build .
+- docker run --rm -p 5173:3000 unitflip:dev npm run dev -- --host 0.0.0.0 --port 3000
+- docker compose up --build
+
+Next objective:
+Persist the user’s current ProcurementWorkspace viewing controls between sessions so filtering, sorting, and grouping choices are restored automatically.
+
+Phase goal:
+Add narrow, local-only saved workspace preferences for ProcurementWorkspace without introducing workflow complexity, sync semantics, or settings sprawl.
+
+Rules:
+- Work only in H:\Dev\MyApps\unitflip
+- Do not break the validated Docker flow
+- Do not introduce approval/review/export workflow machinery
+- Do not add modal-heavy flows
+- Do not broadly redesign ProcurementWorkspace
+- Do not weaken typing
+- Preserve offline-first, deterministic behavior
+- Keep this phase local-only and additive
+- Reuse existing local storage patterns where practical
+- Do not change Docker files unless strictly required
+
+Tasks:
+1. Review the current ProcurementWorkspace controls and identify the safest additive way to persist view preferences.
+2. Save and restore at least these workspace preferences:
+   - selected draft filter
+   - selected sort mode
+   - selected grouping mode
+3. Use sensible defaults when no saved preference exists.
+4. Ensure the workspace still behaves clearly for first-time use.
+5. Keep preferences separate from draft data and analytics data.
+6. Keep the implementation lightweight and local-only.
+
+Required completion summary:
+
+1. Phase completed
+   - confirm whether this phase was fully completed, partially completed, or blocked
+
+2. Files changed
+   - list every file added or modified
+   - briefly describe what changed in each file
+
+3. Saved preferences added
+   - explain exactly which workspace preferences are now persisted
+   - explain where/how they are stored
+   - explain how defaults work when no preference exists
+
+4. Surfaces enhanced
+   - identify exactly how ProcurementWorkspace behavior changed across sessions
+
+5. Progress status
+   - summarize current overall project status
+   - explain where this phase fits into the completion plan for this procurement/maintenance area
+   - include an updated percent-complete estimate for this completion plan
+
+6. Validation status
+   - confirm:
+     - npm run lint
+     - npm run build
+   - confirm Docker validation compatibility
+   - list any warnings or limitations
+
+7. What was intentionally deferred
+   - list anything deliberately not implemented in this phase
+
+8. Next-step recommendations
+   - recommend the best next development step after this phase
+   - explain why it is the correct next move
+   - note any risks or prerequisites
+
+Deliverable:
+Implement only this saved workspace preferences phase and then stop.

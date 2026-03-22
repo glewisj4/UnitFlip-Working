@@ -5,17 +5,23 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-console.log('DEBUG: __dirname is', __dirname);
 
 export default defineConfig(({ mode }) => {
-    const env = loadEnv(mode, '.', '');
+    const env = loadEnv(mode, __dirname, '');
+    const devHost = env.VITE_DEV_HOST || '0.0.0.0';
+    const devPort = Number(env.VITE_DEV_PORT || '3000');
+    const apiProxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:4317';
+
     return {
       server: {
-        port: 3000,
-        host: '0.0.0.0',
+        port: devPort,
+        host: devHost,
+        watch: {
+          usePolling: env.VITE_DOCKER === 'true'
+        },
         proxy: {
           '/api': {
-            target: 'http://localhost:4317',
+            target: apiProxyTarget,
             changeOrigin: true,
             secure: false
           }
