@@ -1,3 +1,9 @@
+import {
+  GeneratedInspectionItem,
+  GeneratedInspectionSection,
+  InspectionTemplateSnapshot,
+} from './templates';
+
 export interface Unit {
   id: string;
   orgId: string;
@@ -27,4 +33,7 @@ export interface Inspection {
   roomSelections?: string[];
   productIds?: string[];
   photoIds: string[];
+  templateSnapshot?: InspectionTemplateSnapshot;
+  generatedSections?: GeneratedInspectionSection[];
+  generatedItems?: GeneratedInspectionItem[];
 }

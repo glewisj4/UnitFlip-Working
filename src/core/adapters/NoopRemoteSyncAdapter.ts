@@ -24,6 +24,36 @@ export class NoopRemoteSyncAdapter implements RemoteSyncAdapter {
     console.log(`[RemoteSync] Upsert Inspection for org ${orgId}`, inspectionPayload);
   }
 
+  async upsertFinding(orgId: string, findingPayload: Record<string, unknown>): Promise<void> {
+    await this.simulateNetworkCall();
+    console.log(`[RemoteSync] Upsert Finding for org ${orgId}`, findingPayload);
+  }
+
+  async deleteFinding(orgId: string, findingId: string): Promise<void> {
+    await this.simulateNetworkCall();
+    console.log(`[RemoteSync] Delete Finding ${findingId} for org ${orgId}`);
+  }
+
+  async upsertRepairTask(orgId: string, taskPayload: Record<string, unknown>): Promise<void> {
+    await this.simulateNetworkCall();
+    console.log(`[RemoteSync] Upsert Repair Task for org ${orgId}`, taskPayload);
+  }
+
+  async deleteRepairTask(orgId: string, repairTaskId: string): Promise<void> {
+    await this.simulateNetworkCall();
+    console.log(`[RemoteSync] Delete Repair Task ${repairTaskId} for org ${orgId}`);
+  }
+
+  async upsertMaterialRequirement(orgId: string, requirementPayload: Record<string, unknown>): Promise<void> {
+    await this.simulateNetworkCall();
+    console.log(`[RemoteSync] Upsert Material Requirement for org ${orgId}`, requirementPayload);
+  }
+
+  async deleteMaterialRequirement(orgId: string, materialRequirementId: string): Promise<void> {
+    await this.simulateNetworkCall();
+    console.log(`[RemoteSync] Delete Material Requirement ${materialRequirementId} for org ${orgId}`);
+  }
+
   async attachPhoto(orgId: string, inspectionId: string, photoId: string): Promise<void> {
     await this.simulateNetworkCall();
     console.log(`[RemoteSync] Attach Photo ${photoId} to Inspection ${inspectionId}`);

@@ -1,3 +1,5 @@
+import { InspectionReportSnapshot } from './operations';
+
 export type ReportStatus = 'queued' | 'generating' | 'ready' | 'failed';
 
 export interface ReportJob {
@@ -25,4 +27,6 @@ export interface ReportJob {
     photoLayout?: 'grid' | 'full';  // default grid
     includeCosts?: boolean;         // default true
   };
+
+  snapshot?: InspectionReportSnapshot;
 }

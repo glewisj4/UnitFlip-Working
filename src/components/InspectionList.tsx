@@ -4,6 +4,7 @@ import { Inspection } from '../core/models/inspections';
 import { InspectionService } from '../core/services/InspectionService';
 import { useAppContext } from '../core/hooks/useAppContext';
 import { useAuditLogger } from '../core/hooks/useAuditLogger';
+import { NewInspectionModal } from './NewInspectionModal';
 
 interface InspectionListProps {
   unitId: string;
@@ -16,6 +17,7 @@ export const InspectionList: React.FC<InspectionListProps> = ({ unitId, onSelect
   const { log } = useAuditLogger();
   const [inspections, setInspections] = useState<Inspection[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
   useEffect(() => {
     if (org) loadInspections();
@@ -27,21 +29,6 @@ export const InspectionList: React.FC<InspectionListProps> = ({ unitId, onSelect
     const list = await InspectionService.listInspections(org.id, unitId);
     setInspections(list);
     setIsLoading(false);
-  };
-
-  const handleCreateInspection = async () => {
-    if (!org || !user) return;
-    const title = prompt('Enter Inspection Title (e.g., Move-out Check):');
-    if (!title) return;
-
-    try {
-      const newInspection = await InspectionService.createInspection(org.id, unitId, title, user.id);
-      log('INSPECTION_CREATED', { entityId: newInspection.id, message: `Created inspection: ${title}` });
-      await loadInspections();
-    } catch (e) {
-      console.error(e);
-      alert('Failed to create inspection');
-    }
   };
 
   const getStatusColor = (status: string) => {
@@ -61,11 +48,11 @@ export const InspectionList: React.FC<InspectionListProps> = ({ unitId, onSelect
           <ArrowLeft size={20} className="text-slate-600" />
         </button>
         <div>
-           <h2 className="text-xl font-bold text-slate-800">Inspections</h2>
-           <p className="text-sm text-slate-500">Manage inspections for this unit</p>
+           <h2 className="text-xl font-bold text-slate-800">Inspection queue</h2>
+           <p className="text-sm text-slate-500">Start a new inspection or continue work for this unit.</p>
         </div>
         <button
-          onClick={handleCreateInspection}
+          onClick={() => setIsCreateModalOpen(true)}
           className="ml-auto bg-lowes-blue text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 transition-colors"
         >
           <Plus size={18} />
@@ -111,6 +98,21 @@ export const InspectionList: React.FC<InspectionListProps> = ({ unitId, onSelect
           ))}
         </div>
       )}
+
+      <NewInspectionModal
+        isOpen={isCreateModalOpen}
+        unitId={unitId}
+        onClose={() => setIsCreateModalOpen(false)}
+        onCreated={(inspectionId) => {
+          setIsCreateModalOpen(false);
+          void loadInspections();
+          onSelectInspection(inspectionId);
+          log('INSPECTION_CREATION_FLOW_COMPLETED', {
+            entityId: inspectionId,
+            message: 'Created inspection from the new inspection modal',
+          });
+        }}
+      />
     </div>
   );
 };

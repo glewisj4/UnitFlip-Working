@@ -6,6 +6,7 @@ import { ReportJob } from '../core/models/reports';
 import { Loader2, AlertTriangle, Download, FileText, Ban, Clock } from 'lucide-react';
 import { EdgeFunctionShareAdapter } from '../core/adapters/EdgeFunctionShareAdapter';
 import { RemoteShareAdapter } from '../core/adapters/RemoteShareAdapter';
+import { ReportProcurementInsights } from './ReportProcurementInsights';
 
 interface ShareLinkViewerProps {
   token: string;
@@ -176,8 +177,8 @@ export const ShareLinkViewer: React.FC<ShareLinkViewerProps> = ({ token }) => {
   const createdAt = report ? new Date(report.createdAt).toLocaleDateString() : 'Unknown';
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      <div className="bg-white border-b border-slate-200 px-6 py-4 shadow-sm">
+    <div className="min-h-screen bg-slate-50 flex flex-col print:min-h-0 print:bg-white">
+      <div className="bg-white border-b border-slate-200 px-6 py-4 shadow-sm print:hidden">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-3">
                 <div className="bg-blue-100 p-2 rounded-lg">
@@ -191,30 +192,37 @@ export const ShareLinkViewer: React.FC<ShareLinkViewerProps> = ({ token }) => {
         </div>
       </div>
 
-      <div className="flex-1 p-6">
-        <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="p-8 text-center border-b border-slate-100">
-                <h2 className="text-2xl font-bold text-slate-800 mb-2">PDF Report Ready</h2>
-                <p className="text-slate-600 mb-6">
+      <div className="flex-1 p-6 print:p-0">
+        <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden print:max-w-none print:rounded-none print:border-0 print:shadow-none">
+            <div className="p-8 text-center border-b border-slate-100 print:border-b-0 print:px-0 print:pt-0 print:pb-4">
+                <h2 className="text-2xl font-bold text-slate-800 mb-2 print:text-left print:text-xl">PDF Report Ready</h2>
+                <p className="text-slate-600 mb-6 print:mb-4 print:text-left">
                     Generated on {createdAt}
                 </p>
+
+                <ReportProcurementInsights
+                    optimization={report?.snapshot?.procurementOptimization}
+                    vendorIntelligence={report?.snapshot?.procurementVendorIntelligence}
+                    reviewGuidance={report?.snapshot?.procurementReviewGuidance}
+                    compact
+                />
                 
                 {pdfUrl ? (
                     <button 
                         onClick={handleDownload}
-                        className="bg-lowes-blue text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 mx-auto"
+                        className="bg-lowes-blue text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 mx-auto print:hidden"
                     >
                         <Download size={20} />
                         Download PDF Report
                     </button>
                 ) : (
-                    <div className="text-amber-600 bg-amber-50 p-4 rounded-lg inline-block">
+                    <div className="text-amber-600 bg-amber-50 p-4 rounded-lg inline-block print:rounded-none print:border print:border-slate-300 print:bg-white print:text-slate-700">
                         PDF file is not available.
                     </div>
                 )}
             </div>
             
-            <div className="bg-slate-50 p-4 text-center">
+            <div className="bg-slate-50 p-4 text-center print:hidden">
                 <p className="text-xs text-slate-500 flex items-center justify-center gap-1">
                     <AlertTriangle size={12} />
                     This report link is public. Anyone with the link can access it until it expires on {new Date(link.expiresAt).toLocaleDateString()}.

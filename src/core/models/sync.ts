@@ -3,6 +3,12 @@ export type SyncOpStatus = 'pending' | 'in_flight' | 'succeeded' | 'failed';
 export type SyncOpType =
   | 'UPSERT_UNIT'
   | 'UPSERT_INSPECTION'
+  | 'UPSERT_FINDING'
+  | 'DELETE_FINDING'
+  | 'UPSERT_REPAIR_TASK'
+  | 'DELETE_REPAIR_TASK'
+  | 'UPSERT_MATERIAL_REQUIREMENT'
+  | 'DELETE_MATERIAL_REQUIREMENT'
   | 'ATTACH_PHOTO'
   | 'DETACH_PHOTO'
   | 'UPLOAD_PHOTO'

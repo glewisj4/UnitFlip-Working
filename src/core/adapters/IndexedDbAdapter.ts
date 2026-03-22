@@ -3,7 +3,8 @@ import { LocalStorageAdapter } from './LocalStorageAdapter';
 
 const DB_NAME = 'unitflip';
 const STORE_NAME = 'kv';
-const DB_VERSION = 2;
+const BLOB_STORE_NAME = 'blobs';
+const DB_VERSION = 3;
 
 export class IndexedDbAdapter implements LocalDbAdapter {
   private dbPromise: Promise<IDBDatabase>;
@@ -33,20 +34,23 @@ export class IndexedDbAdapter implements LocalDbAdapter {
       };
 
       request.onsuccess = (event) => {
-        resolve((event.target as IDBOpenDBRequest).result);
+        const db = (event.target as IDBOpenDBRequest).result;
+        db.onversionchange = () => {
+          db.close();
+        };
+        resolve(db);
       };
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
-        
-        // If the store exists, delete it to ensure we have the correct schema (keyPath: 'key')
-        // This is a destructive migration for dev/preview, but ensures consistency.
-        if (db.objectStoreNames.contains(STORE_NAME)) {
-          db.deleteObjectStore(STORE_NAME);
+
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME, { keyPath: 'key' });
         }
-        
-        // Create object store with 'key' as the key path
-        db.createObjectStore(STORE_NAME, { keyPath: 'key' });
+
+        if (!db.objectStoreNames.contains(BLOB_STORE_NAME)) {
+          db.createObjectStore(BLOB_STORE_NAME);
+        }
       };
     });
   }
