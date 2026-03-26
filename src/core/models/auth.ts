@@ -9,7 +9,30 @@ export interface Org {
   name: string;
 }
 
-export type Role = 'admin' | 'manager' | 'contractor' | 'viewer' | 'developer';
+export type Role = 'developer' | 'admin' | 'manager' | 'vendor';
+
+export type IdentityProvider = 'local';
+
+export type Permission =
+  | 'dashboard:view'
+  | 'rooms:view'
+  | 'catalog:view'
+  | 'inspection:view'
+  | 'portfolio:view'
+  | 'templates:view'
+  | 'procurement:view'
+  | 'admin:view'
+  | 'feedback_management:view'
+  | 'developer_tools:view';
+
+export interface LocalSession {
+  user: User;
+  org: Org;
+  role: Role;
+  permissions: Permission[];
+  identityProvider: IdentityProvider;
+  lastSignedInAt: string;
+}
 
 export type FeatureFlagKey = 
   | 'public_share_links'

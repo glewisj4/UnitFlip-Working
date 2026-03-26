@@ -15,6 +15,7 @@ interface CreateInspectionOptions {
   templateSnapshot?: InspectionTemplateSnapshot;
   generatedSections?: GeneratedInspectionSection[];
   generatedItems?: GeneratedInspectionItem[];
+  notes?: string;
 }
 
 export const InspectionService = {
@@ -52,6 +53,7 @@ export const InspectionService = {
       lastEditedByUserId: userId,
       photoIds: [],
       productIds: [],
+      notes: options?.notes,
       templateSnapshot: options?.templateSnapshot,
       generatedSections: options?.generatedSections || [],
       generatedItems: options?.generatedItems || [],
@@ -178,5 +180,14 @@ export const InspectionService = {
         userId,
         payload: { inspectionId, photoId }
     });
+  },
+
+  async deleteInspection(orgId: string, inspectionId: string): Promise<void> {
+    const key = `${STORAGE_KEY_PREFIX}${orgId}`;
+    const inspections = (await adapter.getItem<Inspection[]>(key)) || [];
+    await adapter.setItem(
+      key,
+      inspections.filter((inspection) => inspection.id !== inspectionId)
+    );
   }
 };

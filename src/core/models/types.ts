@@ -44,6 +44,12 @@ export interface CatalogItem {
   name: string;
   categoryId?: string;
   categoryName?: string; // Denormalized for quick access
+  topLevelCategory?: string;
+  subcategory?: string;
+  equivalentGroup?: string;
+  functionalTags?: string[];
+  vendor?: string;
+  importSource?: 'manual' | 'csv' | 'text_paste' | 'quote_pdf' | 'quick_add';
   description?: string;
   tags: string[];
   defaultQty: number;
@@ -59,6 +65,10 @@ export interface CatalogItem {
   status?: ProductStatus;
   actualCost?: number;
   quantity?: number;
+  seedMarker?: {
+    isSeedData: true;
+    seedBatch: string;
+  };
 }
 
 export interface BundleCompanion {

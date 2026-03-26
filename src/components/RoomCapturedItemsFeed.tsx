@@ -49,6 +49,7 @@ interface RoomCapturedItemsFeedProps {
   onSaveDraft: () => Promise<void> | void;
   onCancelEdit: () => void;
   onDeleteItem: (item: RoomCapturedFeedItem) => Promise<void> | void;
+  recommendationPanel?: React.ReactNode;
 }
 
 const iconByType: Record<InspectionCaptureKind, React.ComponentType<{ size?: number; className?: string }>> = {
@@ -103,13 +104,14 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
   onSaveDraft,
   onCancelEdit,
   onDeleteItem,
+  recommendationPanel,
 }) => {
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h3 className="text-base font-semibold text-slate-900">Captured Items</h3>
-          <p className="text-sm text-slate-500">Saved room captures. Open any item to make changes and save them back to the same record.</p>
+          <h3 className="text-base font-semibold text-slate-900">Structured Scope From Capture</h3>
+          <p className="text-sm text-slate-500">Every saved capture becomes a real finding or repair task here. Open any item to edit the same record instead of managing a separate draft.</p>
         </div>
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
           {items.length}
@@ -118,7 +120,7 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
 
       {items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-          No captured items for this room yet.
+          No structured findings or repair tasks exist for this room yet. Capture a note, photo, or checklist issue to create the first one.
         </div>
       ) : (
         <div className="space-y-3">
@@ -464,6 +466,8 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
                         </span>
                       </button>
                     </div>
+
+                    {recommendationPanel ? <div className="mt-3">{recommendationPanel}</div> : null}
                   </div>
                 ) : null}
               </div>

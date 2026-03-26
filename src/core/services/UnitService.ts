@@ -10,7 +10,43 @@ export const UnitService = {
   async listUnits(orgId: string): Promise<Unit[]> {
     const key = `${STORAGE_KEY_PREFIX}${orgId}`;
     const units = (await adapter.getItem<Unit[]>(key)) || [];
-    return units.sort((a, b) => b.updatedAt - a.updatedAt);
+    return units
+      .map((unit) => ({
+        ...unit,
+        assignedLayoutTemplateId: unit.assignedLayoutTemplateId ?? null,
+        favoriteProductIds: Array.isArray(unit.favoriteProductIds) ? unit.favoriteProductIds : [],
+        managementData: unit.managementData
+          ? {
+              ...unit.managementData,
+              applianceLogs: Array.isArray(unit.managementData.applianceLogs) ? unit.managementData.applianceLogs : [],
+              maintenanceHistory: Array.isArray(unit.managementData.maintenanceHistory)
+                ? unit.managementData.maintenanceHistory
+                : [],
+              warrantyInfo: Array.isArray(unit.managementData.warrantyInfo) ? unit.managementData.warrantyInfo : [],
+              keyLog: Array.isArray(unit.managementData.keyLog) ? unit.managementData.keyLog : [],
+              physicalDetails: unit.managementData.physicalDetails
+                ? {
+                    ...unit.managementData.physicalDetails,
+                    roomMeasurements: Array.isArray(unit.managementData.physicalDetails.roomMeasurements)
+                      ? unit.managementData.physicalDetails.roomMeasurements
+                      : [],
+                    windowSizes: Array.isArray(unit.managementData.physicalDetails.windowSizes)
+                      ? unit.managementData.physicalDetails.windowSizes
+                      : [],
+                    doorWidthsIn: Array.isArray(unit.managementData.physicalDetails.doorWidthsIn)
+                      ? unit.managementData.physicalDetails.doorWidthsIn
+                      : [],
+                  }
+                : undefined,
+            }
+          : undefined,
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+
+  async getUnit(orgId: string, unitId: string): Promise<Unit | null> {
+    const units = await this.listUnits(orgId);
+    return units.find((unit) => unit.id === unitId) || null;
   },
 
   async createUnit(
@@ -79,5 +115,12 @@ export const UnitService = {
             payload: archivedUnit as unknown as Record<string, unknown>
         });
     }
+  },
+
+  async deleteUnit(orgId: string, unitId: string): Promise<void> {
+    const key = `${STORAGE_KEY_PREFIX}${orgId}`;
+    const units = (await adapter.getItem<Unit[]>(key)) || [];
+    const updatedUnits = units.filter((unit) => unit.id !== unitId);
+    await adapter.setItem(key, updatedUnits);
   }
 };

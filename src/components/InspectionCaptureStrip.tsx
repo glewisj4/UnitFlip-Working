@@ -25,6 +25,7 @@ interface InspectionCaptureStripProps {
   };
   disabled?: boolean;
   isUploading?: boolean;
+  recommendationPanel?: React.ReactNode;
 }
 
 const ACTIONS: Array<{
@@ -52,6 +53,33 @@ const voiceFallbackLabels = {
   transcript: 'Transcript',
 } as const;
 
+const getDraftEntityLabel = (draft: InspectionCaptureDraft) =>
+  draft.persistenceTarget === 'finding' ? 'finding' : 'repair task';
+
+const getDraftTitle = (draft: InspectionCaptureDraft) =>
+  draft.persistenceTarget === 'finding' ? 'Suggested Finding' : 'Suggested Repair Task';
+
+const getDraftSummary = (draft: InspectionCaptureDraft) => {
+  if (draft.checklistContext?.checklistOrigin) {
+    return `This checklist issue is ready to become a structured ${getDraftEntityLabel(draft)}. Save it here and the checklist stays linked.`;
+  }
+
+  if (draft.source === 'photo') {
+    return `This photo capture is ready to become a structured ${getDraftEntityLabel(draft)} with evidence already attached.`;
+  }
+
+  if (draft.source === 'voice') {
+    return `This voice capture was parsed into a suggested ${getDraftEntityLabel(draft)}. Review it quickly, then save it into scope.`;
+  }
+
+  return `This capture is ready to become a structured ${getDraftEntityLabel(draft)} for the room feed and downstream scope.`;
+};
+
+const getDraftImpactLabel = (draft: InspectionCaptureDraft) =>
+  draft.persistenceTarget === 'finding'
+    ? 'Creates a finding that can drive repair tasks and materials next.'
+    : 'Creates a repair task that can drive materials and procurement next.';
+
 export const InspectionCaptureStrip: React.FC<InspectionCaptureStripProps> = ({
   selectedAction,
   onActionChange,
@@ -67,6 +95,7 @@ export const InspectionCaptureStrip: React.FC<InspectionCaptureStripProps> = ({
   voiceLogContext,
   disabled = false,
   isUploading = false,
+  recommendationPanel,
 }) => {
   const [value, setValue] = useState('');
   const [isVoicePanelOpen, setIsVoicePanelOpen] = useState(false);
@@ -103,7 +132,7 @@ export const InspectionCaptureStrip: React.FC<InspectionCaptureStripProps> = ({
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-slate-900">Capture Strip</h3>
-          <p className="text-sm text-slate-500">Type a quick issue, task, or note. If the app is unsure, it opens review before saving.</p>
+          <p className="text-sm text-slate-500">Capture a note, photo, or checklist issue and turn it into a finding or repair task without leaving the room workspace.</p>
         </div>
         <button
           type="button"
@@ -177,7 +206,7 @@ export const InspectionCaptureStrip: React.FC<InspectionCaptureStripProps> = ({
       </form>
 
       <p className="mt-2 text-xs text-slate-500">
-        Confident captures save right away. Ambiguous captures stay local in review until you save them.
+        Confident captures save as structured scope right away. Ambiguous captures stay local as a suggested finding or task until you confirm them.
       </p>
 
       {draft ? (
@@ -186,9 +215,9 @@ export const InspectionCaptureStrip: React.FC<InspectionCaptureStripProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <Sparkles size={16} className="text-amber-700" />
-                <h4 className="text-sm font-semibold text-slate-900">Review Capture</h4>
+                <h4 className="text-sm font-semibold text-slate-900">{getDraftTitle(draft)}</h4>
               </div>
-              <p className="mt-1 text-xs text-slate-600">Review this parsed item before saving it to the room feed.</p>
+              <p className="mt-1 text-xs text-slate-600">{getDraftSummary(draft)}</p>
             </div>
             <div className="flex flex-wrap gap-2">
               {draft.matchedRules.map((rule) => (
@@ -197,6 +226,14 @@ export const InspectionCaptureStrip: React.FC<InspectionCaptureStripProps> = ({
                 </span>
               ))}
             </div>
+          </div>
+
+          <div className="mb-3 rounded-xl border border-amber-200 bg-white/80 px-3 py-2 text-xs text-slate-700">
+            <span className="font-semibold text-slate-900">
+              {draft.persistenceTarget === 'finding' ? 'Creates finding:' : 'Creates repair task:'}
+            </span>{' '}
+            {draft.label}
+            <div className="mt-1 text-slate-600">{getDraftImpactLabel(draft)}</div>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -320,16 +357,18 @@ export const InspectionCaptureStrip: React.FC<InspectionCaptureStripProps> = ({
               onClick={() => void onDraftCommit()}
               className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
             >
-              Save Capture
+              {draft.persistenceTarget === 'finding' ? 'Create Finding' : 'Create Task'}
             </button>
             <button
               type="button"
               onClick={onDraftCancel}
               className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700"
             >
-              Cancel
+              Dismiss
             </button>
           </div>
+
+          {recommendationPanel ? <div className="mt-3">{recommendationPanel}</div> : null}
         </div>
       ) : null}
 

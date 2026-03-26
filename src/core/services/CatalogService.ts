@@ -22,6 +22,12 @@ export class CatalogService {
           name: p.name,
           categoryId: undefined,
           categoryName: p.category,
+          topLevelCategory: p.category,
+          subcategory: undefined,
+          equivalentGroup: undefined,
+          functionalTags: [],
+          vendor: undefined,
+          importSource: 'manual',
           description: p.description,
           tags: [],
           defaultQty: p.quantity || 1,
@@ -34,8 +40,8 @@ export class CatalogService {
         await this.saveItems(orgId, items);
       }
     }
-    
-    return items || [];
+
+    return (items || []).map((item) => this.normalizeItem(item));
   }
 
   static async getItem(orgId: string, itemId: string): Promise<CatalogItem | undefined> {
@@ -49,13 +55,13 @@ export class CatalogService {
 
   static async addItem(orgId: string, item: Omit<CatalogItem, 'id' | 'orgId' | 'createdAt' | 'updatedAt'>): Promise<CatalogItem> {
     const items = await this.getItems(orgId);
-    const newItem: CatalogItem = {
+    const newItem = this.normalizeItem({
       ...item,
       id: createId(),
       orgId,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    };
+    });
     items.push(newItem);
     await this.saveItems(orgId, items);
     return newItem;
@@ -66,11 +72,11 @@ export class CatalogService {
     const index = items.findIndex(i => i.id === itemId);
     if (index === -1) throw new Error('Item not found');
 
-    const updatedItem = {
+    const updatedItem = this.normalizeItem({
       ...items[index],
       ...updates,
       updatedAt: Date.now(),
-    };
+    });
     items[index] = updatedItem;
     await this.saveItems(orgId, items);
     return updatedItem;
@@ -87,15 +93,29 @@ export class CatalogService {
     const item = items.find(i => i.id === itemId);
     if (!item) throw new Error('Item not found');
 
-    const newItem: CatalogItem = {
+    const newItem = this.normalizeItem({
       ...item,
       id: createId(),
       name: `${item.name} (Copy)`,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    };
+    });
     items.push(newItem);
     await this.saveItems(orgId, items);
     return newItem;
+  }
+
+  private static normalizeItem(item: CatalogItem): CatalogItem {
+    return {
+      ...item,
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      functionalTags: Array.isArray(item.functionalTags) ? item.functionalTags : [],
+      topLevelCategory: item.topLevelCategory || item.categoryName || item.category,
+      subcategory: item.subcategory || undefined,
+      equivalentGroup: item.equivalentGroup || undefined,
+      vendor: item.vendor || item.options?.[0]?.brand || undefined,
+      importSource: item.importSource || 'manual',
+      options: Array.isArray(item.options) ? item.options : [],
+    };
   }
 }

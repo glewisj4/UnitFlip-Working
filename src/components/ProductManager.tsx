@@ -21,6 +21,7 @@ import {
   MinusCircle,
   ChevronLeft,
   Edit2,
+  Upload,
 } from 'lucide-react';
 
 // If your project uses framer-motion instead, swap this import accordingly.
@@ -36,6 +37,9 @@ import { ProductEditor } from './ProductEditor';
 import { BundleManager } from './BundleManager';
 import { BundleSuggestionsModal } from './BundleSuggestionsModal';
 import { useDebouncedCallback } from '../core/hooks/useDebouncedCallback';
+import { CatalogImportModal } from './CatalogImportModal';
+import { ClientLoggerService } from '../core/services/ClientLoggerService';
+import { ProductCatalogFoundationService } from '../core/services/ProductCatalogFoundationService';
 
 import { ImportWizard } from './Import/ImportWizard';
 import { StagingArea } from './Import/StagingArea';
@@ -63,6 +67,7 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
   const [bundleRules, setBundleRules] = useState<BundleRule[]>([]);
 
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | 'all' | 'uncategorized'>('all');
+  const [selectedTagFilter, setSelectedTagFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('updatedAt');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
@@ -104,6 +109,7 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
   // Import State
   const [isImportWizardOpen, setIsImportWizardOpen] = useState(false);
   const [isStagingAreaOpen, setIsStagingAreaOpen] = useState(false);
+  const [isCatalogImportOpen, setIsCatalogImportOpen] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const menuContainerRef = useRef<HTMLDivElement>(null);
@@ -111,8 +117,9 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
   const loadData = useCallback(async () => {
     if (!orgId) return;
     try {
+      const seededCategories = await ProductCatalogFoundationService.ensureDefaultCategories(orgId);
       const [cats, items, rules] = await Promise.all([
-        CategoryService.getCategories(orgId),
+        Promise.resolve(seededCategories),
         CatalogService.getItems(orgId),
         BundleRuleService.getRules(orgId),
       ]);
@@ -168,7 +175,10 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
         !q ||
         p.name.toLowerCase().includes(q) ||
         (p.description || '').toLowerCase().includes(q) ||
-        (p.tags || []).some((t) => t.toLowerCase().includes(q));
+        (p.tags || []).some((t) => t.toLowerCase().includes(q)) ||
+        (p.functionalTags || []).some((t) => t.toLowerCase().includes(q)) ||
+        (p.equivalentGroup || '').toLowerCase().includes(q) ||
+        (p.vendor || '').toLowerCase().includes(q);
 
       let matchesCategory = true;
       if (selectedCategoryId === 'all') matchesCategory = true;
@@ -179,7 +189,12 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
         matchesCategory = p.categoryId === selectedCategoryId || (p.categoryId ? subCategoryIds.includes(p.categoryId) : false);
       }
 
-      return matchesSearch && matchesCategory;
+      const matchesTag =
+        selectedTagFilter === 'all' ||
+        (p.functionalTags || []).includes(selectedTagFilter) ||
+        (p.tags || []).includes(selectedTagFilter);
+
+      return matchesSearch && matchesCategory && matchesTag;
     });
 
     result.sort((a, b) => {
@@ -199,7 +214,33 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
     });
 
     return result;
-  }, [products, searchTerm, selectedCategoryId, categories, sortKey, sortOrder]);
+  }, [products, searchTerm, selectedCategoryId, selectedTagFilter, categories, sortKey, sortOrder]);
+
+  const availableFunctionalTags = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          products.flatMap((product) => [...(product.functionalTags || []), ...(product.tags || [])] as string[]),
+        ),
+      ).sort((left, right) => String(left).localeCompare(String(right))),
+    [products],
+  );
+
+  useEffect(() => {
+    if (!orgId) return;
+    ClientLoggerService.info('Product catalog filter applied.', {
+      category: 'catalog',
+      eventType: 'product_filter.applied',
+      screen: 'ProductManager',
+      contextIds: { orgId },
+      metadata: {
+        selectedCategoryId,
+        selectedTagFilter,
+        hasSearchTerm: searchTerm.trim().length > 0,
+        resultCount: sortedAndFilteredProducts.length,
+      },
+    });
+  }, [orgId, searchTerm, selectedCategoryId, selectedTagFilter, sortedAndFilteredProducts.length]);
 
   const selectedProduct = useMemo(() => {
     return products.find((p) => p.id === selectedProductId) || null;
@@ -433,6 +474,23 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
             <ArrowUpDown className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
             <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
           </div>
+
+          <div className="relative">
+            <select
+              className="appearance-none pl-9 pr-8 py-2 bg-slate-50 border-none rounded-xl text-sm font-medium text-slate-600 focus:ring-2 focus:ring-lowes-blue cursor-pointer"
+              value={selectedTagFilter}
+              onChange={(e) => setSelectedTagFilter(e.target.value)}
+            >
+              <option value="all">All Tags</option>
+              {availableFunctionalTags.map((tag) => (
+                <option key={tag} value={tag}>
+                  {tag}
+                </option>
+              ))}
+            </select>
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
+            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={14} />
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -457,6 +515,14 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
             title="Import Lowe’s Quote (PDF)"
           >
             <ExternalLink size={16} /> <span className="hidden lg:inline">Import PDF</span>
+          </button>
+
+          <button
+            onClick={() => setIsCatalogImportOpen(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-semibold text-sm transition-all active:scale-95"
+            title="Import CSV, paste text, or quick-add placeholders"
+          >
+            <Upload size={16} /> <span className="hidden lg:inline">Catalog Import</span>
           </button>
 
           <button
@@ -518,6 +584,21 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
                         </div>
                         <div className="min-w-0">
                           <div className="font-semibold text-slate-900 text-sm truncate">{item.name}</div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {item.equivalentGroup ? (
+                              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                                Alt {item.equivalentGroup}
+                              </span>
+                            ) : null}
+                            {(item.functionalTags || []).slice(0, 2).map((tag) => (
+                              <span
+                                key={`${item.id}-${tag}`}
+                                className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                              >
+                                {tag}
+                              </span>
+                            ))}
+                          </div>
                           <div className="md:hidden text-[10px] text-slate-500 flex items-center gap-1">
                             {topCat?.name || item.categoryName || 'Uncategorized'} • {(item.options || []).length} options
                           </div>
@@ -529,6 +610,7 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
                       <div className="flex flex-col">
                         <span className="text-xs text-slate-700 font-medium">{topCat?.name || 'Uncategorized'}</span>
                         {subCat && <span className="text-[10px] text-slate-400">{subCat.name}</span>}
+                        {item.vendor ? <span className="text-[10px] text-slate-400">{item.vendor}</span> : null}
                       </div>
                     </td>
 
@@ -667,6 +749,7 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
               onManageBundle={() => handleManageBundle(selectedProduct)}
               onTestBundle={() => handleTestBundle(selectedProduct)}
               hasBundle={bundleRules.some((r) => r.triggerCatalogItemId === selectedProduct.id && r.enabled)}
+              alternates={products.filter((item) => item.id !== selectedProduct.id && item.equivalentGroup && item.equivalentGroup === selectedProduct.equivalentGroup)}
             />
           ) : (
             <div className="h-full flex flex-col items-center justify-center p-8 text-center">
@@ -723,6 +806,7 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
                     onManageBundle={() => handleManageBundle(selectedProduct)}
                     onTestBundle={() => handleTestBundle(selectedProduct)}
                     hasBundle={bundleRules.some((r) => r.triggerCatalogItemId === selectedProduct.id && r.enabled)}
+                    alternates={products.filter((item) => item.id !== selectedProduct.id && item.equivalentGroup && item.equivalentGroup === selectedProduct.equivalentGroup)}
                   />
                 )}
               </div>
@@ -814,6 +898,17 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
         />
       )}
 
+      {isCatalogImportOpen && orgId ? (
+        <CatalogImportModal
+          orgId={orgId}
+          categories={categories}
+          onClose={() => setIsCatalogImportOpen(false)}
+          onImportComplete={() => {
+            void loadData();
+          }}
+        />
+      ) : null}
+
       {/* Staging Area */}
       {isStagingAreaOpen && (
         <StagingArea onClose={() => setIsStagingAreaOpen(false)} />
@@ -827,6 +922,7 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
             orgId: orgId || '',
             name: '',
             tags: [],
+            functionalTags: [],
             defaultQty: 1,
             unit: 'ea',
             defaultTier: Tier.STANDARD,
@@ -914,6 +1010,7 @@ export const ProductManager: React.FC<ProductManagerProps> = ({
 interface ProductInspectorProps {
   product: CatalogItem;
   categories: Category[];
+  alternates: CatalogItem[];
   onChange: (updates: Partial<CatalogItem>) => void;
   onDuplicate: () => void;
   onDelete: () => void;
@@ -925,6 +1022,7 @@ interface ProductInspectorProps {
 const ProductInspector: React.FC<ProductInspectorProps> = ({
   product,
   categories,
+  alternates,
   onChange,
   onDuplicate,
   onDelete,
@@ -1038,7 +1136,12 @@ const ProductInspector: React.FC<ProductInspectorProps> = ({
                     onChange={(e) => {
                       const catId = e.target.value;
                       const cat = categories.find((c) => c.id === catId);
-                      onChange({ categoryId: catId || undefined, categoryName: cat?.name });
+                      onChange({
+                        categoryId: catId || undefined,
+                        categoryName: cat?.name,
+                        topLevelCategory: cat?.name,
+                        subcategory: undefined,
+                      });
                     }}
                     className="w-full px-3 py-2 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-lowes-blue"
                   >
@@ -1062,12 +1165,23 @@ const ProductInspector: React.FC<ProductInspectorProps> = ({
                       if (!catId) {
                         // no subcategory selected, keep parent as categoryId
                         const parent = categories.find((c) => c.id === computedParentId);
-                        onChange({ categoryId: computedParentId || undefined, categoryName: parent?.name });
+                        onChange({
+                          categoryId: computedParentId || undefined,
+                          categoryName: parent?.name,
+                          topLevelCategory: parent?.name,
+                          subcategory: undefined,
+                        });
                         return;
                       }
 
                       const cat = categories.find((c) => c.id === catId);
-                      onChange({ categoryId: catId, categoryName: cat?.name });
+                      const parent = categories.find((c) => c.id === cat?.parentCategoryId);
+                      onChange({
+                        categoryId: catId,
+                        categoryName: cat?.name,
+                        topLevelCategory: parent?.name || cat?.name,
+                        subcategory: cat?.name,
+                      });
                     }}
                     className="w-full px-3 py-2 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-lowes-blue"
                     disabled={!subCategories.length}
@@ -1081,6 +1195,44 @@ const ProductInspector: React.FC<ProductInspectorProps> = ({
                   </select>
                 </div>
               </div>
+            </div>
+
+            <div className="space-y-4">
+              <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Product Mapping</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">Vendor</label>
+                  <input
+                    type="text"
+                    value={product.vendor || ''}
+                    onChange={(e) => onChange({ vendor: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-lowes-blue"
+                    placeholder="Turn Supply Co."
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">Equivalent Group</label>
+                  <input
+                    type="text"
+                    value={product.equivalentGroup || ''}
+                    onChange={(e) => onChange({ equivalentGroup: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-lowes-blue"
+                    placeholder="bathroom_sink_faucet_standard"
+                  />
+                </div>
+              </div>
+              {alternates.length > 0 ? (
+                <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">
+                    Alternates in this group
+                  </div>
+                  <div className="mt-2 space-y-1 text-sm text-emerald-900">
+                    {alternates.slice(0, 4).map((alternate) => (
+                      <div key={alternate.id}>{alternate.name}</div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-4">
@@ -1109,16 +1261,18 @@ const ProductInspector: React.FC<ProductInspectorProps> = ({
             </div>
 
             <div className="space-y-4">
-              <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Tags</h4>
+              <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Functional Tags</h4>
               <div className="flex flex-wrap gap-2">
-                {(product.tags || []).map((tag) => (
+                {(product.functionalTags || []).map((tag) => (
                   <span
                     key={tag}
-                    className="flex items-center gap-1 px-2 py-1 bg-slate-100 text-slate-600 text-[10px] font-bold rounded-lg"
+                    className="flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-lg"
                   >
                     {tag}
                     <button
-                      onClick={() => onChange({ tags: (product.tags || []).filter((t) => t !== tag) })}
+                      onClick={() =>
+                        onChange({ functionalTags: (product.functionalTags || []).filter((t) => t !== tag) })
+                      }
                       className="hover:text-red-500 transition-colors"
                       aria-label="Remove tag"
                     >
@@ -1134,8 +1288,8 @@ const ProductInspector: React.FC<ProductInspectorProps> = ({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       const val = e.currentTarget.value.trim();
-                      if (val && !(product.tags || []).includes(val)) {
-                        onChange({ tags: [...(product.tags || []), val] });
+                      if (val && !(product.functionalTags || []).includes(val)) {
+                        onChange({ functionalTags: [...(product.functionalTags || []), val] });
                         e.currentTarget.value = '';
                       }
                     }
@@ -1145,11 +1299,12 @@ const ProductInspector: React.FC<ProductInspectorProps> = ({
             </div>
 
             <div className="space-y-4">
-              <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Vendor Mapping</h4>
-              <div className="p-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200 flex flex-col items-center justify-center text-center">
-                <ExternalLink size={20} className="text-slate-300 mb-2" />
-                <p className="text-[10px] font-bold text-slate-400 uppercase">Coming Soon</p>
-                <p className="text-[10px] text-slate-400">Direct integration with Lowe&apos;s Pro supply chain</p>
+              <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Catalog Context</h4>
+              <div className="p-4 bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-2 text-xs text-slate-500">
+                <div>Top-level category: {product.topLevelCategory || 'Not resolved yet'}</div>
+                <div>Subcategory: {product.subcategory || 'Not resolved yet'}</div>
+                <div>Import source: {product.importSource || 'manual'}</div>
+                <div>This phase keeps vendor APIs out of scope and uses manual, CSV, pasted text, and quote import paths.</div>
               </div>
             </div>
           </div>

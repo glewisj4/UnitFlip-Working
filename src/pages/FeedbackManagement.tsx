@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../core/hooks/useAppContext';
 import { ClientLogEntry, ClientLogLevel, ClientLoggerService } from '../core/services/ClientLoggerService';
+import { DevSeedService, SeedSummary } from '../core/services/DevSeedService';
 import {
   DerivedSignal,
   SignalAnalysisService,
@@ -24,6 +25,7 @@ import { FeedbackCategory, FeedbackRecord, FeedbackService } from '../core/servi
 
 type FeedbackManagementTab = 'feedback' | 'logs' | 'signals';
 type FeedbackDateFilter = 'all' | '24h' | '7d' | '30d';
+type DevSeedActionState = 'idle' | 'working' | 'success' | 'failed';
 
 interface FeedbackManagementProps {
   onBack: () => void;
@@ -115,7 +117,7 @@ const destinationLabel = (destination: SignalDestination) => {
 const uniqueIds = (values: string[]) => [...new Set(values)];
 
 export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }) => {
-  const { org, user } = useAppContext();
+  const { org, user, role } = useAppContext();
   const [activeTab, setActiveTab] = useState<FeedbackManagementTab>('feedback');
   const [feedbackRecords, setFeedbackRecords] = useState<FeedbackRecord[]>([]);
   const [logEntries, setLogEntries] = useState<ClientLogEntry[]>([]);
@@ -128,6 +130,10 @@ export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }
   const [expandedLogIds, setExpandedLogIds] = useState<Set<string>>(new Set());
   const [activeSignal, setActiveSignal] = useState<DerivedSignal | null>(null);
   const [sessionFocusIds, setSessionFocusIds] = useState<string[]>([]);
+  const [hasSeedData, setHasSeedData] = useState(false);
+  const [seedSummary, setSeedSummary] = useState<SeedSummary | null>(null);
+  const [seedActionState, setSeedActionState] = useState<DevSeedActionState>('idle');
+  const [seedActionMessage, setSeedActionMessage] = useState<string | null>(null);
   const hasLoggedOpen = useRef(false);
   const hasLoggedFilterChange = useRef(false);
   const hasLoggedSignalView = useRef(false);
@@ -151,9 +157,45 @@ export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }
     setLogEntries(ClientLoggerService.getRecentEntries().slice().reverse());
   };
 
+  const loadSeedStatus = async () => {
+    if (!org || role !== 'developer') {
+      setHasSeedData(false);
+      setSeedSummary(null);
+      return;
+    }
+
+    const summary = await DevSeedService.getSeedSummary(org.id);
+    setSeedSummary(summary);
+    setHasSeedData(summary.seededUnits > 0 || summary.seededInspections > 0 || summary.seededCatalogItems > 0);
+  };
+
   useEffect(() => {
     loadData();
-  }, []);
+    void loadSeedStatus();
+  }, [org, role]);
+
+  useEffect(() => {
+    if (!org || role !== 'developer') return;
+
+    const handleSeedRefresh = (event: Event) => {
+      const detail = (event as CustomEvent<{ orgId?: string; summary?: SeedSummary }>).detail;
+      if (detail?.orgId !== org.id) return;
+      if (detail.summary) {
+        setSeedSummary(detail.summary);
+        setHasSeedData(
+          detail.summary.seededUnits > 0 ||
+            detail.summary.seededInspections > 0 ||
+            detail.summary.seededCatalogItems > 0,
+        );
+      } else {
+        void loadSeedStatus();
+      }
+      loadData();
+    };
+
+    window.addEventListener(DevSeedService.REFRESH_EVENT, handleSeedRefresh as EventListener);
+    return () => window.removeEventListener(DevSeedService.REFRESH_EVENT, handleSeedRefresh as EventListener);
+  }, [org, role]);
 
   useEffect(() => {
     if (hasLoggedOpen.current) return;
@@ -356,6 +398,56 @@ export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }
     });
   };
 
+  const handleSeedDemoData = async () => {
+    if (!org || !user || role !== 'developer') return;
+
+    const confirmed = window.confirm(
+      'Seed a fictional demo portfolio? Existing demo data will be replaced. Non-seeded records will remain untouched.'
+    );
+    if (!confirmed) return;
+
+    setSeedActionState('working');
+    setSeedActionMessage('Seeding fictional facilities, units, inspections, and demo catalog items...');
+
+    try {
+      const result = await DevSeedService.seedDemoData(org.id, user.id);
+      loadData();
+      await loadSeedStatus();
+      setSeedActionState('success');
+      setSeedActionMessage(
+        `Demo data seeded: ${result.facilities} facilities, ${result.buildings} buildings, ${result.units} units, ${result.inspections} inspections, ${result.catalogItems} catalog items.`
+      );
+    } catch (error) {
+      setSeedActionState('failed');
+      setSeedActionMessage(error instanceof Error ? error.message : 'Seeding demo data failed.');
+    }
+  };
+
+  const handleClearSeedData = async () => {
+    if (!org || !user || role !== 'developer') return;
+
+    const confirmed = window.confirm(
+      'Clear only demo data marked for this developer seed batch? Real user-created records will remain untouched.'
+    );
+    if (!confirmed) return;
+
+    setSeedActionState('working');
+    setSeedActionMessage('Clearing seeded demo data...');
+
+    try {
+      const result = await DevSeedService.clearSeedData(org.id, user.id);
+      loadData();
+      await loadSeedStatus();
+      setSeedActionState('success');
+      setSeedActionMessage(
+        `Cleared ${result.clearedUnits} demo units, ${result.clearedInspections} demo inspections, and ${result.clearedCatalogItems} demo catalog items.`
+      );
+    } catch (error) {
+      setSeedActionState('failed');
+      setSeedActionMessage(error instanceof Error ? error.message : 'Clearing demo data failed.');
+    }
+  };
+
   const handleSignalNavigation = (signal: DerivedSignal, destinationOverride?: SignalDestination) => {
     const destination = destinationOverride || signal.destination;
     setActiveSignal(signal);
@@ -496,6 +588,69 @@ export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }
           </div>
         </div>
       </section>
+
+      {role === 'developer' ? (
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-2xl">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Developer Utilities</p>
+              <h2 className="mt-1 text-xl font-semibold text-slate-900">Demo portfolio seed controls</h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Seed or clear a clearly marked fictional portfolio for UI validation. These controls only affect records marked as demo data.
+              </p>
+              <p className="mt-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                Seed batch: {DevSeedService.SEED_BATCH} • {hasSeedData ? 'Demo data loaded' : 'No demo data loaded'}
+              </p>
+              {seedSummary ? (
+                <div className="mt-3 grid gap-2 text-xs text-slate-600 sm:grid-cols-3">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    {seedSummary.seededUnits} units across {seedSummary.facilities} facilities
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    {seedSummary.buildings} buildings and {seedSummary.seededInspections} inspections
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                    {seedSummary.seededCatalogItems} demo catalog items available
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleSeedDemoData}
+                disabled={seedActionState === 'working'}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {seedActionState === 'working' ? <RefreshCw size={14} className="animate-spin" /> : null}
+                Seed Demo Data
+              </button>
+              <button
+                type="button"
+                onClick={handleClearSeedData}
+                disabled={seedActionState === 'working' || !hasSeedData}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-60"
+              >
+                Clear Demo Data
+              </button>
+            </div>
+          </div>
+
+          {seedActionMessage ? (
+            <div
+              className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${
+                seedActionState === 'failed'
+                  ? 'border-red-200 bg-red-50 text-red-700'
+                  : seedActionState === 'success'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-blue-200 bg-blue-50 text-blue-700'
+              }`}
+            >
+              {seedActionMessage}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {activeSignal || sessionFocusIds.length > 0 ? (
         <section className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-4 shadow-sm">

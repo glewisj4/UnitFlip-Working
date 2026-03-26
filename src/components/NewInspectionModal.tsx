@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, ClipboardList, Loader2, Plus, X } from 'lucide-react';
+import { Unit } from '../core/models/inspections';
 import { LayoutTemplate } from '../core/models/templates';
 import { LayoutTemplateService } from '../core/services/LayoutTemplateService';
 import { LayoutChecklistMappingService } from '../core/services/LayoutChecklistMappingService';
@@ -8,6 +9,7 @@ import {
   InspectionTemplateGenerationService,
 } from '../core/services/InspectionTemplateGenerationService';
 import { InspectionService } from '../core/services/InspectionService';
+import { UnitService } from '../core/services/UnitService';
 import { useAppContext } from '../core/hooks/useAppContext';
 import { useAuditLogger } from '../core/hooks/useAuditLogger';
 
@@ -35,6 +37,7 @@ export const NewInspectionModal: React.FC<NewInspectionModalProps> = ({
   const { log } = useAuditLogger();
   const [title, setTitle] = useState('');
   const [layouts, setLayouts] = useState<LayoutTemplate[]>([]);
+  const [unitRecord, setUnitRecord] = useState<Unit | null>(null);
   const [selectedLayoutId, setSelectedLayoutId] = useState<string>('');
   const [isLoadingLayouts, setIsLoadingLayouts] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -44,30 +47,42 @@ export const NewInspectionModal: React.FC<NewInspectionModalProps> = ({
     if (!isOpen) {
       setTitle('');
       setLayouts([]);
+      setUnitRecord(null);
       setSelectedLayoutId('');
       setErrorMessage(null);
       return;
     }
 
-    const loadLayouts = async () => {
+    const loadSetup = async () => {
       setIsLoadingLayouts(true);
       setErrorMessage(null);
       try {
-        const availableLayouts = await LayoutTemplateService.listActive(org?.id || null);
+        const [availableLayouts, loadedUnit] = await Promise.all([
+          LayoutTemplateService.listActive(org?.id || null),
+          org?.id ? UnitService.getUnit(org.id, unitId) : Promise.resolve(null),
+        ]);
         setLayouts(availableLayouts);
-        if (availableLayouts.length > 0) {
-          setSelectedLayoutId((current) => current || availableLayouts[0].id);
+        setUnitRecord(loadedUnit);
+
+        const preferredLayoutId =
+          loadedUnit?.assignedLayoutTemplateId &&
+          availableLayouts.some((layout) => layout.id === loadedUnit.assignedLayoutTemplateId)
+            ? loadedUnit.assignedLayoutTemplateId
+            : availableLayouts[0]?.id || '';
+
+        if (availableLayouts.length > 0 || preferredLayoutId) {
+          setSelectedLayoutId((current) => current || preferredLayoutId);
         }
       } catch (error) {
         console.error(error);
-        setErrorMessage('Failed to load layout templates.');
+        setErrorMessage('Failed to load inspection setup data.');
       } finally {
         setIsLoadingLayouts(false);
       }
     };
 
-    void loadLayouts();
-  }, [isOpen, org?.id]);
+    void loadSetup();
+  }, [isOpen, org?.id, unitId]);
 
   const selectedLayout = useMemo(
     () => layouts.find((layout) => layout.id === selectedLayoutId) || null,
@@ -160,10 +175,37 @@ export const NewInspectionModal: React.FC<NewInspectionModalProps> = ({
             />
           </div>
 
+          {unitRecord ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="text-sm font-semibold text-emerald-900">Unit reference data available</div>
+              <div className="mt-2 text-sm text-emerald-800">
+                {unitRecord.assignedLayoutTemplateId
+                  ? 'This unit has a saved layout assignment, so Inspection starts from the unit standard by default.'
+                  : 'No saved unit layout assignment yet. You can still choose a layout for this inspection.'}
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-wide text-emerald-800">
+                {unitRecord.assignedLayoutTemplateId ? <span className="rounded-full bg-white px-2.5 py-1">Template standard ready</span> : null}
+                {unitRecord.managementData?.maintenanceCheatSheet?.airFilterSize ? (
+                  <span className="rounded-full bg-white px-2.5 py-1">
+                    Filter {unitRecord.managementData.maintenanceCheatSheet.airFilterSize}
+                  </span>
+                ) : null}
+                {unitRecord.managementData?.maintenanceCheatSheet?.mainWaterShutoffLocation ? (
+                  <span className="rounded-full bg-white px-2.5 py-1">Water shut-off logged</span>
+                ) : null}
+                {unitRecord.favoriteProductIds?.length ? (
+                  <span className="rounded-full bg-white px-2.5 py-1">{unitRecord.favoriteProductIds.length} favorites saved</span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
           <div>
             <div className="flex items-center justify-between mb-3">
               <label className="block text-sm font-medium text-slate-700">Layout Template</label>
-              <span className="text-xs text-slate-400">Optional fallback: create without template</span>
+              <span className="text-xs text-slate-400">
+                {unitRecord?.assignedLayoutTemplateId ? 'Preselected from the unit record when available' : 'Optional fallback: create without template'}
+              </span>
             </div>
 
             {isLoadingLayouts ? (
