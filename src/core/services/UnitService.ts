@@ -1,10 +1,24 @@
 import { createLocalDbAdapter } from '../adapters/createLocalDbAdapter';
 import { Unit } from '../models/inspections';
+import { LayoutTemplate } from '../models/templates';
 import { createId } from '../../services/storage';
 import { SyncQueueService } from './SyncQueueService';
 
 const STORAGE_KEY_PREFIX = 'unitflip_units_v1:';
 const adapter = createLocalDbAdapter();
+
+type LayoutInferenceReason = 'assigned' | 'exact_shape' | 'full_bath_fallback' | 'same_bedroom_fallback' | 'fallback_first_active';
+
+const getUnitShape = (unit: Unit) => {
+  const bedrooms = unit.managementData?.physicalDetails?.bedrooms;
+  const bathrooms = unit.managementData?.physicalDetails?.bathrooms;
+  return {
+    bedrooms: typeof bedrooms === 'number' && Number.isFinite(bedrooms) ? bedrooms : null,
+    bathrooms: typeof bathrooms === 'number' && Number.isFinite(bathrooms) ? bathrooms : null,
+  };
+};
+
+const getBathroomTotal = (layout: LayoutTemplate) => layout.bathroomsFull + layout.bathroomsHalf * 0.5;
 
 export const UnitService = {
   async listUnits(orgId: string): Promise<Unit[]> {
@@ -122,5 +136,71 @@ export const UnitService = {
     const units = (await adapter.getItem<Unit[]>(key)) || [];
     const updatedUnits = units.filter((unit) => unit.id !== unitId);
     await adapter.setItem(key, updatedUnits);
+  },
+
+  inferLayoutTemplateForUnit(unit: Unit, layouts: LayoutTemplate[]): { layout: LayoutTemplate; reason: Exclude<LayoutInferenceReason, 'assigned' | 'fallback_first_active'> } | null {
+    const activeLayouts = layouts.filter((layout) => layout.isActive);
+    const { bedrooms, bathrooms } = getUnitShape(unit);
+    if (bedrooms === null || bathrooms === null) {
+      return null;
+    }
+
+    const exactMatch =
+      activeLayouts.find((layout) => layout.bedrooms === bedrooms && getBathroomTotal(layout) === bathrooms) || null;
+    if (exactMatch) {
+      return { layout: exactMatch, reason: 'exact_shape' };
+    }
+
+    const matchingFullBathLayouts = activeLayouts.filter(
+      (layout) => layout.bedrooms === bedrooms && layout.bathroomsFull === Math.floor(bathrooms)
+    );
+    if (matchingFullBathLayouts.length === 1) {
+      return { layout: matchingFullBathLayouts[0], reason: 'full_bath_fallback' };
+    }
+
+    const matchingBedroomLayouts = activeLayouts.filter((layout) => layout.bedrooms === bedrooms);
+    if (matchingBedroomLayouts.length === 1) {
+      return { layout: matchingBedroomLayouts[0], reason: 'same_bedroom_fallback' };
+    }
+
+    return null;
+  },
+
+  resolveTemplateForUnit(unit: Unit, layouts: LayoutTemplate[]): { layout: LayoutTemplate | null; reason: LayoutInferenceReason | null } {
+    const activeLayouts = layouts.filter((layout) => layout.isActive);
+    const assigned =
+      (unit.assignedLayoutTemplateId
+        ? activeLayouts.find((layout) => layout.id === unit.assignedLayoutTemplateId) || null
+        : null) || null;
+    if (assigned) {
+      return { layout: assigned, reason: 'assigned' };
+    }
+
+    const inferred = this.inferLayoutTemplateForUnit(unit, activeLayouts);
+    if (inferred) {
+      return { layout: inferred.layout, reason: inferred.reason };
+    }
+
+    return { layout: activeLayouts[0] || null, reason: activeLayouts[0] ? 'fallback_first_active' : null };
+  },
+
+  async backfillLayoutTemplateIfMissing(orgId: string, unit: Unit, layouts: LayoutTemplate[]): Promise<Unit | null> {
+    if (unit.assignedLayoutTemplateId) {
+      return unit;
+    }
+
+    const inferred = this.inferLayoutTemplateForUnit(unit, layouts);
+    if (!inferred) {
+      return null;
+    }
+
+    const updatedUnit: Unit = {
+      ...unit,
+      assignedLayoutTemplateId: inferred.layout.id,
+      updatedAt: Date.now(),
+    };
+
+    await this.updateUnit(orgId, updatedUnit);
+    return updatedUnit;
   }
 };

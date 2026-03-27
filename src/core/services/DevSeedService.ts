@@ -672,7 +672,7 @@ export class DevSeedService {
       for (let index = 0; index < unitsToCreate.length; index += 1) {
         const unitSeed = unitsToCreate[index];
         const scenario = SCENARIO_DEFINITIONS[unitSeed.scenarioKey];
-        const assignedLayoutTemplateId = layoutIds.length > 0 ? layoutIds[index % layoutIds.length] : null;
+        const assignedLayoutTemplateId = this.resolveSeedLayoutTemplateId(unitSeed, layouts) || (layoutIds.length > 0 ? layoutIds[index % layoutIds.length] : null);
         const favoriteProductIds = this.resolveFavoriteProductIds(
           scenario.favoriteEquivalentGroups,
           catalogByEquivalentGroup,
@@ -1349,6 +1349,21 @@ export class DevSeedService {
     }
 
     return units;
+  }
+
+  private static resolveSeedLayoutTemplateId(unitSeed: UnitSeedRecord, layouts: Awaited<ReturnType<typeof LayoutTemplateService.listActive>>) {
+    const bedrooms = unitSeed.managementData.physicalDetails?.bedrooms ?? null;
+    const bathrooms = unitSeed.managementData.physicalDetails?.bathrooms ?? null;
+    if (bedrooms === null || bathrooms === null) return null;
+
+    const exactMatch =
+      layouts.find((layout) => layout.bedrooms === bedrooms && layout.bathroomsFull + layout.bathroomsHalf === bathrooms) ||
+      layouts.find((layout) => layout.bedrooms === bedrooms && layout.bathroomsFull === Math.floor(bathrooms)) ||
+      layouts.find((layout) => layout.bedrooms === bedrooms) ||
+      layouts.find((layout) => layout.bedrooms === Math.max(0, Math.min(2, bedrooms)) && layout.bathroomsFull >= Math.floor(bathrooms)) ||
+      null;
+
+    return exactMatch?.id || null;
   }
 
   private static buildManagementData(

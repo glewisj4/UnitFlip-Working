@@ -62,7 +62,16 @@ interface ProcurementWorkspaceProps {
   focusedUnitId?: string | null;
   initialFocus?: 'all' | 'procurement' | 'vendor' | 'receiving' | 'verification';
   focusedRequirementId?: string | null;
+  focusedRequirementIds?: string[] | null;
   originContextLabel?: string | null;
+  arrivalContext?: {
+    source: 'focused_submission';
+    outcome: 'submitted' | 'queued';
+    unitName: string;
+    itemCount: number;
+    estimatedTotal: number;
+    nextStep: string;
+  } | null;
   onClearUnitFocus?: () => void;
   onOpenInspectionScope?: (
     inspectionId: string,
@@ -515,7 +524,9 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
   focusedUnitId = null,
   initialFocus = 'all',
   focusedRequirementId = null,
+  focusedRequirementIds = [],
   originContextLabel = null,
+  arrivalContext = null,
   onClearUnitFocus,
   onOpenInspectionScope,
 }) => {
@@ -542,7 +553,8 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
   const [assignmentSelections, setAssignmentSelections] = useState<Record<string, string>>({});
   const [correctionRouteSelections, setCorrectionRouteSelections] = useState<Record<string, MaterialCorrectionRoute>>({});
   const [vendorCompletionEvidence, setVendorCompletionEvidence] = useState<Record<string, { note: string; details: string }>>({});
-  const [highlightedRequirementId, setHighlightedRequirementId] = useState<string | null>(null);
+  const [highlightedRequirementIds, setHighlightedRequirementIds] = useState<string[]>([]);
+  const [visibleArrivalContext, setVisibleArrivalContext] = useState(arrivalContext);
   const [message, setMessage] = useState<string | null>(null);
   const [refreshAnalyticsSnapshot, setRefreshAnalyticsSnapshot] = useState<{
     previous?: ProcurementRefreshAnalyticsSnapshot;
@@ -848,17 +860,29 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
   }, [groupBy, inspectionLookup, prioritizedRequirements]);
 
   useEffect(() => {
-    if (!focusedRequirementId) return;
-    setHighlightedRequirementId(focusedRequirementId);
-    const target = requirementRowRefs.current[focusedRequirementId];
+    const nextHighlightedIds = Array.from(new Set([focusedRequirementId, ...(focusedRequirementIds || [])].filter(Boolean))) as string[];
+    if (nextHighlightedIds.length === 0) return;
+    setHighlightedRequirementIds(nextHighlightedIds);
+    const target = requirementRowRefs.current[nextHighlightedIds[0]];
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
     const timeout = window.setTimeout(() => {
-      setHighlightedRequirementId((current) => (current === focusedRequirementId ? null : current));
-    }, 4000);
+      setHighlightedRequirementIds((current) =>
+        current.every((id) => nextHighlightedIds.includes(id)) ? [] : current
+      );
+    }, 5000);
     return () => window.clearTimeout(timeout);
-  }, [focusedRequirementId, groupedRequirements]);
+  }, [focusedRequirementId, focusedRequirementIds, groupedRequirements]);
+
+  useEffect(() => {
+    setVisibleArrivalContext(arrivalContext);
+    if (!arrivalContext) return;
+    const timeout = window.setTimeout(() => {
+      setVisibleArrivalContext((current) => (current === arrivalContext ? null : current));
+    }, 9000);
+    return () => window.clearTimeout(timeout);
+  }, [arrivalContext]);
 
   const activationSummary = useMemo(
     () => ({
@@ -1901,6 +1925,33 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
         </div>
       ) : null}
 
+      {visibleArrivalContext && !isVendorView ? (
+        <div
+          data-testid="procurement-focused-arrival"
+          className={`rounded-2xl border px-4 py-3 text-sm ${
+            visibleArrivalContext.outcome === 'queued'
+              ? 'border-amber-200 bg-amber-50 text-amber-900'
+              : 'border-blue-200 bg-blue-50 text-blue-900'
+          }`}
+        >
+          <div className="font-semibold">
+            {visibleArrivalContext.outcome === 'queued'
+              ? 'Focused submission queued locally'
+              : 'Focused submission arrived in Procurement'}
+          </div>
+          <div className="mt-1">
+            {visibleArrivalContext.unitName} • {visibleArrivalContext.itemCount} item
+            {visibleArrivalContext.itemCount === 1 ? '' : 's'} • ${visibleArrivalContext.estimatedTotal.toFixed(2)}
+          </div>
+          <div className="mt-1">
+            {visibleArrivalContext.outcome === 'queued'
+              ? 'The work is already available locally in this queue and will sync when the device reconnects.'
+              : 'These materials are now in the procurement flow and ready for review.'}
+          </div>
+          <div className="mt-1 font-medium">{visibleArrivalContext.nextStep}</div>
+        </div>
+      ) : null}
+
       {message ? (
         <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">{message}</div>
       ) : null}
@@ -2297,7 +2348,7 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
                         requirementRowRefs.current[requirement.id] = node;
                       }}
                       className={`p-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between ${
-                        highlightedRequirementId === requirement.id ? 'bg-blue-50 ring-2 ring-inset ring-blue-200' : ''
+                        highlightedRequirementIds.includes(requirement.id) ? 'bg-blue-50 ring-2 ring-inset ring-blue-200' : ''
                       }`}
                     >
                       <div className="flex items-start gap-3">

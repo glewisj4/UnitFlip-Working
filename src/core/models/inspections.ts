@@ -117,6 +117,7 @@ export interface Unit {
   zip?: string;
   assignedLayoutTemplateId?: string | null;
   favoriteProductIds?: string[];
+  budgetThreshold?: number;
   notes?: string;
   managementData?: UnitManagementData;
   seedMarker?: SeedMarker;
