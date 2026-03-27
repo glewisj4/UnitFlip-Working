@@ -1,14 +1,20 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { User, Org, Role, FeatureFlags, FeatureFlagKey } from '../models/auth';
+import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { FeatureFlags, FeatureFlagKey, LocalSession, Org, Permission, Role } from '../models/auth';
 import { AppContextService } from '../services/AppContextService';
+import { AuthPolicyService } from '../services/AuthPolicyService';
 import { FeatureFlagService } from '../services/FeatureFlagService';
 
 interface AppContextType {
-  user: User | null;
-  org: Org | null;
+  session: LocalSession | null;
+  user: LocalSession['user'] | null;
+  org: LocalSession['org'] | null;
   role: Role | null;
+  permissions: Permission[];
   flags: FeatureFlags | null;
   isLoaded: boolean;
+  hasPermission: (permission: Permission) => boolean;
+  signInLocal: (input: { displayName: string; orgName: string; role: Role }) => Promise<void>;
+  signOut: () => Promise<void>;
   setRole: (role: Role) => Promise<void>;
   setFlag: (key: FeatureFlagKey, value: boolean) => Promise<void>;
 }
@@ -16,58 +22,75 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppContextProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [org, setOrg] = useState<Org | null>(null);
-  const [role, setRole] = useState<Role | null>(null);
+  const [session, setSession] = useState<LocalSession | null>(null);
   const [flags, setFlags] = useState<FeatureFlags | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  useEffect(() => {
-    const loadContext = async () => {
-      try {
-        // Load user/org/role context
-        const context = await AppContextService.getContext();
-        setUser(context.user);
-        setOrg(context.org);
-        setRole(context.role);
+  const loadContext = async () => {
+    try {
+      const loadedSession = await AppContextService.getContext();
+      setSession(loadedSession);
 
-        // Load feature flags for the org
-        const loadedFlags = await FeatureFlagService.getFlags(context.org.id);
+      if (loadedSession?.org) {
+        const loadedFlags = await FeatureFlagService.getFlags(loadedSession.org.id);
         setFlags(loadedFlags);
-      } catch (error) {
-        console.error('Failed to initialize app context', error);
-      } finally {
-        setIsLoaded(true);
+      } else {
+        setFlags(null);
       }
-    };
+    } catch (error) {
+      console.error('Failed to initialize app context', error);
+      setSession(null);
+      setFlags(null);
+    } finally {
+      setIsLoaded(true);
+    }
+  };
 
-    loadContext();
+  useEffect(() => {
+    void loadContext();
   }, []);
 
+  const signInLocal = async (input: { displayName: string; orgName: string; role: Role }) => {
+    const nextSession = await AppContextService.signInLocal(input);
+    setSession(nextSession);
+    const loadedFlags = await FeatureFlagService.getFlags(nextSession.org.id);
+    setFlags(loadedFlags);
+  };
+
+  const signOut = async () => {
+    await AppContextService.signOut();
+    setSession(null);
+    setFlags(null);
+  };
+
   const updateRole = async (newRole: Role) => {
-    await AppContextService.setRole(newRole);
-    setRole(newRole);
+    const updatedSession = await AppContextService.setRole(newRole);
+    if (!updatedSession) return;
+    setSession(updatedSession);
   };
 
   const updateFlag = async (key: FeatureFlagKey, value: boolean) => {
-    if (!org || !flags) return;
-    await FeatureFlagService.setFlag(org.id, key, value);
-    setFlags(prev => prev ? { ...prev, [key]: value } : null);
+    if (!session?.org || !flags) return;
+    await FeatureFlagService.setFlag(session.org.id, key, value);
+    setFlags((prev) => (prev ? { ...prev, [key]: value } : null));
   };
 
-  return (
-    <AppContext.Provider value={{ 
-      user, 
-      org, 
-      role, 
-      flags, 
-      isLoaded, 
-      setRole: updateRole, 
-      setFlag: updateFlag 
-    }}>
-      {children}
-    </AppContext.Provider>
-  );
+  const contextValue: AppContextType = {
+    session,
+    user: session?.user || null,
+    org: session?.org || null,
+    role: session?.role || null,
+    permissions: session?.permissions || [],
+    flags,
+    isLoaded,
+    hasPermission: (permission) => AuthPolicyService.hasPermission(session?.permissions, permission),
+    signInLocal,
+    signOut,
+    setRole: updateRole,
+    setFlag: updateFlag,
+  };
+
+  return <AppContext.Provider value={contextValue}>{children}</AppContext.Provider>;
 };
 
 export const useAppContext = (): AppContextType => {

@@ -2,7 +2,9 @@ import React, { useState } from 'react';
 import { Home, Package, ShoppingBag, Wrench, Menu, X, ClipboardList, RefreshCw, Wifi, WifiOff, Shield, Layers3, ShoppingCart, MessageSquareWarning } from 'lucide-react';
 import { useSyncEngine } from '../core/hooks/useSyncEngine';
 import { useAppContext } from '../core/hooks/useAppContext';
+import { AuthPolicyService } from '../core/services/AuthPolicyService';
 import { ClientLoggerService } from '../core/services/ClientLoggerService';
+import { DevSeedService } from '../core/services/DevSeedService';
 import { FeedbackCategory, FeedbackService } from '../core/services/FeedbackService';
 import { FeedbackButton } from './FeedbackButton';
 import { FeedbackPanel } from './FeedbackPanel';
@@ -23,16 +25,17 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
   const [feedbackSavedCount, setFeedbackSavedCount] = useState(() => FeedbackService.getFeedbackCount());
   const [feedbackSubmitState, setFeedbackSubmitState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
   const [feedbackSubmitMessage, setFeedbackSubmitMessage] = useState<string | undefined>(undefined);
+  const [isSeedingDemoData, setIsSeedingDemoData] = useState(false);
   const { isOnline, isSyncing, lastSyncAt, triggerSyncNow } = useSyncEngine();
-  const { org, user, role } = useAppContext();
+  const { org, user, role, permissions, signOut } = useAppContext();
   const viewLabels: Record<string, string> = {
     dashboard: 'Dashboard',
-    rooms: 'Room Manager',
+    rooms: 'Unit Workspace',
     products: 'All Products',
     'repair-kits': 'Repair Kits',
     checklist: 'Checklist',
     inspections: 'Inspection',
-    'unit-management': 'Unit Management',
+    'unit-management': 'Portfolio',
     procurement: 'Procurement',
     templates: 'Templates',
     admin: 'Retention & Settings',
@@ -43,6 +46,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
     onTabChange(tab);
     setIsMobileMenuOpen(false);
   };
+
+  const canAccessView = (view: Parameters<typeof AuthPolicyService.canAccessView>[1]) =>
+    AuthPolicyService.canAccessView(permissions, view);
 
   const buildFeedbackContext = () => ({
     route: window.location.pathname || '/',
@@ -157,6 +163,30 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
     });
   };
 
+  const handleSeedDemoData = async () => {
+    if (isSeedingDemoData || role !== 'developer' || !org || !user) return;
+
+    setIsSeedingDemoData(true);
+    console.log('[DevSeedTrigger] Starting demo data seed...', {
+      orgId: org.id,
+      userId: user.id,
+    });
+
+    try {
+      await DevSeedService.seedDemoData(org.id, user.id);
+      console.log('[DevSeedTrigger] Demo data seed completed. Reloading app...');
+      window.location.reload();
+    } catch (error) {
+      console.error('[DevSeedTrigger] Demo data seed failed.', error);
+      setIsSeedingDemoData(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await signOut();
+    setIsMobileMenuOpen(false);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row relative">
       {/* Mobile Header */}
@@ -196,140 +226,164 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
         </div>
         
         <nav className="p-4 space-y-2 overflow-y-auto max-h-[calc(100vh-80px)]">
-          <button
-            onClick={() => handleTabClick('dashboard')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'dashboard' 
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <Home size={20} />
-            <span className="font-medium">Dashboard</span>
-          </button>
+          {canAccessView('dashboard') ? (
+            <button
+              onClick={() => handleTabClick('dashboard')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                activeTab === 'dashboard' 
+                  ? 'bg-lowes-blue text-white' 
+                  : 'text-slate-300 hover:bg-slate-800'
+              }`}
+            >
+              <Home size={20} />
+              <span className="font-medium">Dashboard</span>
+            </button>
+          ) : null}
           
-          <button
-            onClick={() => handleTabClick('rooms')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'rooms' 
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <Package size={20} />
-            <span className="font-medium">Room Manager</span>
-          </button>
+          {canAccessView('rooms') ? (
+            <button
+              onClick={() => handleTabClick('rooms')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                activeTab === 'rooms' 
+                  ? 'bg-lowes-blue text-white' 
+                  : 'text-slate-300 hover:bg-slate-800'
+              }`}
+            >
+              <Package size={20} />
+              <span className="font-medium">Unit Workspace</span>
+            </button>
+          ) : null}
 
-          <div className="my-4 border-t border-slate-800"></div>
-          <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Catalog</p>
+          {canAccessView('products') ? (
+            <>
+              <div className="my-4 border-t border-slate-800"></div>
+              <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Catalog</p>
 
-          <button
-            onClick={() => handleTabClick('products')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'products' 
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <ShoppingBag size={20} />
-            <span className="font-medium">All Products</span>
-          </button>
+              <button
+                onClick={() => handleTabClick('products')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                  activeTab === 'products' 
+                    ? 'bg-lowes-blue text-white' 
+                    : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <ShoppingBag size={20} />
+                <span className="font-medium">All Products</span>
+              </button>
 
-          <button
-            onClick={() => handleTabClick('repair-kits')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'repair-kits' 
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <Wrench size={20} />
-            <span className="font-medium">Repair Kits</span>
-          </button>
+              <button
+                onClick={() => handleTabClick('repair-kits')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                  activeTab === 'repair-kits' 
+                    ? 'bg-lowes-blue text-white' 
+                    : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <Wrench size={20} />
+                <span className="font-medium">Repair Kits</span>
+              </button>
+            </>
+          ) : null}
 
           <div className="my-4 border-t border-slate-800"></div>
           <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Operations</p>
 
-          <button
-            onClick={() => handleTabClick('inspections')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'inspections' 
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <ClipboardList size={20} />
-            <span className="font-medium">Inspection</span>
-          </button>
+          {canAccessView('inspections') ? (
+            <button
+              onClick={() => handleTabClick('inspections')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                activeTab === 'inspections' 
+                  ? 'bg-lowes-blue text-white' 
+                  : 'text-slate-300 hover:bg-slate-800'
+              }`}
+            >
+              <ClipboardList size={20} />
+              <span className="font-medium">Inspection</span>
+            </button>
+          ) : null}
 
-          <button
-            onClick={() => handleTabClick('procurement')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'procurement' 
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <ShoppingCart size={20} />
-            <span className="font-medium">Procurement</span>
-          </button>
+          {canAccessView('procurement') ? (
+            <button
+              onClick={() => handleTabClick('procurement')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                activeTab === 'procurement' 
+                  ? 'bg-lowes-blue text-white' 
+                  : 'text-slate-300 hover:bg-slate-800'
+              }`}
+            >
+              <ShoppingCart size={20} />
+              <span className="font-medium">Procurement</span>
+            </button>
+          ) : null}
 
-          <div className="my-4 border-t border-slate-800"></div>
-          <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Management</p>
+          {canAccessView('unit-management') ? (
+            <>
+              <div className="my-4 border-t border-slate-800"></div>
+              <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Management</p>
 
-          <button
-            onClick={() => handleTabClick('unit-management')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'unit-management' 
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <Package size={20} />
-            <span className="font-medium">Unit Management</span>
-          </button>
-
-          <div className="my-4 border-t border-slate-800"></div>
-          <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Admin</p>
-
-          <button
-            onClick={() => handleTabClick('templates')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'templates' 
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <Layers3 size={20} />
-            <span className="font-medium">Templates</span>
-          </button>
-
-          <button
-            onClick={() => handleTabClick('admin')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'admin' || activeTab === 'feedback-management'
-                ? 'bg-lowes-blue text-white' 
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-          >
-            <Shield size={20} />
-            <span className="font-medium">Retention & Settings</span>
-          </button>
-
-          {role === 'developer' ? (
-            <div className="px-4">
               <button
-                onClick={() => handleTabClick('feedback-management')}
-                className={`w-full flex items-center gap-3 rounded-lg px-4 py-3 text-left transition-colors ${
-                  activeTab === 'feedback-management'
-                    ? 'bg-slate-800 text-white'
-                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                onClick={() => handleTabClick('unit-management')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                  activeTab === 'unit-management' 
+                    ? 'bg-lowes-blue text-white' 
+                    : 'text-slate-300 hover:bg-slate-800'
                 }`}
               >
-                <MessageSquareWarning size={18} />
-                <span className="font-medium">Feedback Management</span>
+                <Package size={20} />
+                <span className="font-medium">Portfolio</span>
               </button>
-            </div>
+            </>
+          ) : null}
+
+          {canAccessView('templates') || canAccessView('admin') || role === 'developer' ? (
+            <>
+              <div className="my-4 border-t border-slate-800"></div>
+              <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Admin</p>
+
+              {canAccessView('templates') ? (
+                <button
+                  onClick={() => handleTabClick('templates')}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                    activeTab === 'templates' 
+                      ? 'bg-lowes-blue text-white' 
+                      : 'text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  <Layers3 size={20} />
+                  <span className="font-medium">Templates</span>
+                </button>
+              ) : null}
+
+              {canAccessView('admin') ? (
+                <button
+                  onClick={() => handleTabClick('admin')}
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
+                    activeTab === 'admin' || activeTab === 'feedback-management'
+                      ? 'bg-lowes-blue text-white' 
+                      : 'text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  <Shield size={20} />
+                  <span className="font-medium">Retention & Settings</span>
+                </button>
+              ) : null}
+
+              {role === 'developer' ? (
+                <div className="px-4">
+                  <button
+                    onClick={() => handleTabClick('feedback-management')}
+                    className={`w-full flex items-center gap-3 rounded-lg px-4 py-3 text-left transition-colors ${
+                      activeTab === 'feedback-management'
+                        ? 'bg-slate-800 text-white'
+                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                    }`}
+                  >
+                    <MessageSquareWarning size={18} />
+                    <span className="font-medium">Feedback Management</span>
+                  </button>
+                </div>
+              ) : null}
+            </>
           ) : null}
 
           <div className="pt-8 px-4">
@@ -358,6 +412,38 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
             {viewLabels[activeTab] || activeTab.replace(/-/g, ' ')}
           </h2>
           <div className="flex items-center gap-4">
+            {role === 'developer' ? (
+              <button
+                type="button"
+                onClick={handleSeedDemoData}
+                disabled={isSeedingDemoData || !org || !user}
+                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                title="Developer-only demo portfolio seed trigger"
+              >
+                {isSeedingDemoData ? 'Seeding Demo Data…' : 'Seed Demo Data'}
+              </button>
+            ) : null}
+            {user && org && role ? (
+              <div className="hidden rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-right md:block">
+                <div className="flex items-center justify-end gap-2">
+                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Local Session</span>
+                  <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white">
+                    {role}
+                  </span>
+                </div>
+                <div className="text-sm font-medium text-slate-900">{user.name}</div>
+                <div className="text-xs text-slate-500">{org.name}</div>
+              </div>
+            ) : null}
+            {user ? (
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                Switch Session
+              </button>
+            ) : null}
             {/* Sync Status Badge */}
             <div className="flex items-center gap-2 text-sm">
                 {!isOnline ? (

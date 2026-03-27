@@ -33,10 +33,10 @@ export interface Category {
   parentId?: string | null;
   path?: string;
   sortOrder: number;
-  isActive: boolean;
-  createdAt: string; // ISO
-  updatedAt: string; // ISO
-  
+  isActive?: boolean;
+  createdAt: string | number;
+  updatedAt: string | number;
+
   // Legacy fields for backward compatibility during migration
   parentCategoryId?: string | null;
   color?: string;
@@ -46,40 +46,45 @@ export interface Category {
 export interface CatalogItem {
   id: string;
   orgId: string;
-  
+
+  // Canonical and legacy title fields coexist for migration compatibility.
   title: string;
   normalizedTitle: string;
-  
+  name: string;
+
   itemNumber?: string;
   modelNumber?: string;
   brand?: string;
-  
+
   categoryId?: string;
-  categoryName?: string; // Denormalized for quick access
-  
+  categoryName?: string;
+  topLevelCategory?: string;
+  subcategory?: string;
+  equivalentGroup?: string;
+  functionalTags?: string[];
+  vendor?: string;
+  importSource?: 'manual' | 'csv' | 'text_paste' | 'quote_pdf' | 'quick_add';
+
   defaultPrice?: number;
   priceSource?: string;
-  
   imageUrl?: string;
-  
   description?: string;
-  tags?: string[];
-  
+  tags: string[];
+
   isActive: boolean;
-  
+
   source?: string;
   sourceRef?: string;
-  
-  createdAt: string; // ISO
-  updatedAt: string; // ISO
+
+  createdAt: string | number;
+  updatedAt: string | number;
   createdBy?: string;
   updatedBy?: string;
-  
+
   lastVerifiedAt?: string;
   notes?: string;
 
   // Legacy fields for backward compatibility
-  name?: string;
   defaultQty?: number;
   unit?: string;
   defaultTier?: Tier;
@@ -89,6 +94,10 @@ export interface CatalogItem {
   status?: ProductStatus;
   actualCost?: number;
   quantity?: number;
+  seedMarker?: {
+    isSeedData: true;
+    seedBatch: string;
+  };
 }
 
 export interface BundleCompanion {
@@ -123,14 +132,14 @@ export interface ProductInstance {
   selectedOptionId?: string;
   status: ProductStatus;
   notes?: string;
-  addedAt: string; // ISO
-  updatedAt: string; // ISO
+  addedAt: string | number;
+  updatedAt: string | number;
 }
 
 export interface Room {
   id: string;
   name: string;
-  icon: string; // Lucide icon name
+  icon: string;
   description?: string;
   budget: number;
 }
@@ -167,13 +176,13 @@ export interface ImportBatch {
   status: ImportBatchStatus;
   quoteNumber: string | null;
   storeNumber: string | null;
-  createdDate: string | null; // ISO date
-  validUntil: string | null; // ISO date
+  createdDate: string | null;
+  validUntil: string | null;
   subtotal: number | null;
   estimatedTotal: number | null;
   filename: string;
-  fileRef: string; // reference to stored PDF blob
-  createdAt: string; // ISO
+  fileRef: string;
+  createdAt: string;
   createdBy: string | null;
 }
 
@@ -188,17 +197,17 @@ export interface StagedProduct {
   normalizedTitle: string;
   itemNumber: string | null;
   modelNumber: string | null;
+  fulfillment?: string | null;
   type: string | null;
   unitPrice: number | null;
   qty: number | null;
+  lineTotal?: number | null;
   status: StagedProductStatus;
   suggestedCategoryId: string | null;
   approvedCatalogItemId: string | null;
   duplicateOfStagedProductId: string | null;
   notes: string | null;
-  createdAt: string; // ISO
-  
-  // New fields
+  createdAt: string;
   imageUrl?: string | null;
   duplicateCandidate?: boolean;
   duplicateTargetId?: string | null;

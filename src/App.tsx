@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
-import { RoomView } from './components/RoomView';
 import { ChecklistMode } from './components/ChecklistMode';
 import { ProductManager } from './components/ProductManager';
 import { RepairKitManager } from './components/RepairKitManager';
@@ -16,18 +15,56 @@ import { TemplateManager } from './components/TemplateManager';
 import { ProcurementWorkspace } from './components/ProcurementWorkspace';
 import { InspectionHome } from './components/InspectionHome';
 import { UnitManagement } from './components/UnitManagement';
+import { UnitWorkspace } from './components/UnitWorkspace';
+import { LocalSignInScreen } from './components/LocalSignInScreen';
 import { ClientCrashCapture, ErrorBoundary } from './components/ErrorBoundary';
 import { FeedbackManagement } from './pages/FeedbackManagement';
 
 import { CatalogProvider } from './core/hooks/useCatalog';
-import { AppState, CatalogItem, Room, RepairTemplate } from './core/models/types';
-import { getStoredData, saveData, createId } from './services/storage';
+import { AppState, CatalogItem, RepairTemplate } from './core/models/types';
+import { getStoredData, saveData } from './services/storage';
 
 import { useDebouncedCallback } from './core/hooks/useDebouncedCallback';
 import { AppContextProvider, useAppContext } from './core/hooks/useAppContext';
 import { useAuditLogger } from './core/hooks/useAuditLogger';
 import { SyncEngineProvider } from './core/hooks/useSyncEngine';
+import { AuthPolicyService, AppView } from './core/services/AuthPolicyService';
 
+type LifecycleTab = 'overview' | 'inspection' | 'scope' | 'procurement' | 'vendor' | 'verification';
+type InspectionScopeSection = 'findings' | 'tasks' | 'materials';
+type InspectionScopeTarget = {
+  entityType: 'finding' | 'task' | 'material';
+  entityId: string;
+  originLabel?: string | null;
+};
+type ProcurementFocus = 'all' | 'procurement' | 'vendor' | 'receiving' | 'verification';
+type WorkspaceAttentionContext = {
+  unitId: string;
+  preferredTab?: LifecycleTab | null;
+  inspectionId?: string | null;
+  scopeSection?: InspectionScopeSection | null;
+  scopeTarget?: InspectionScopeTarget | null;
+  reasonLabel?: string | null;
+  reasonDetail?: string | null;
+  token: number;
+};
+type RecentWorkSurface = 'inspection' | 'unit_workspace' | 'procurement';
+type RecentWorkEntry = {
+  id: string;
+  surface: RecentWorkSurface;
+  unitId: string;
+  label: string;
+  detail?: string | null;
+  preferredTab?: LifecycleTab | null;
+  inspectionId?: string | null;
+  scopeSection?: InspectionScopeSection | null;
+  scopeTarget?: InspectionScopeTarget | null;
+  procurementFocus?: ProcurementFocus;
+  requirementId?: string | null;
+  originLabel?: string | null;
+};
+
+const RECENT_WORK_LIMIT = 5;
 const getShareTokenFromLocation = (): string | null => {
   const pathname = window.location.pathname || '';
   if (!pathname.startsWith('/share/')) return null;
@@ -42,25 +79,264 @@ const getShareTokenFromLocation = (): string | null => {
   return tokenPart.length > 0 ? tokenPart : null;
 };
 
+const buildRecentWorkId = (entry: Omit<RecentWorkEntry, 'id'>) =>
+  [
+    entry.surface,
+    entry.unitId,
+    entry.inspectionId || 'inspection:none',
+    entry.scopeSection || 'scope:none',
+    entry.scopeTarget?.entityType || 'target:none',
+    entry.scopeTarget?.entityId || 'entity:none',
+    entry.procurementFocus || 'focus:none',
+    entry.requirementId || 'requirement:none',
+    entry.preferredTab || 'tab:none',
+  ].join('::');
+
+const buildRecentWorkStorageKey = (role?: string | null) => `unitflip:recent-work:${role || 'anonymous'}`;
+
+const readRecentWork = (role?: string | null): RecentWorkEntry[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.sessionStorage.getItem(buildRecentWorkStorageKey(role));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.slice(0, RECENT_WORK_LIMIT) : [];
+  } catch {
+    return [];
+  }
+};
+
+const trimRouteOriginLabel = (value?: string | null) =>
+  value
+    ?.replace(/^Opened from [^•]+ • /, '')
+    ?.replace(/^Opened from [^•]+$/, '')
+    ?.trim() || null;
+
 const AppContent: React.FC = () => {
   // NOTE: This AppState is legacy/local-only for Rooms/Products/Templates.
   // Units/Inspections/Photos/Reports/ShareLinks live in their own services/stores.
   const [data, setData] = useState<AppState>({ rooms: [], products: [], repairTemplates: [], categories: [], bundleRules: [] });
 
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [currentView, setCurrentView] = useState('dashboard');
-  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [isAppDataLoaded, setIsAppDataLoaded] = useState(false);
+  const [currentView, setCurrentView] = useState('inspections');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [selectedWorkspaceUnitId, setSelectedWorkspaceUnitId] = useState<string | null>(null);
+  const [selectedWorkspaceAttentionContext, setSelectedWorkspaceAttentionContext] = useState<WorkspaceAttentionContext | null>(null);
+  const [recentWork, setRecentWork] = useState<RecentWorkEntry[]>([]);
 
   // Inspection Flow State
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [selectedInspectionId, setSelectedInspectionId] = useState<string | null>(null);
+  const [selectedInspectionScopeSection, setSelectedInspectionScopeSection] = useState<InspectionScopeSection | null>(null);
+  const [selectedInspectionScopeTarget, setSelectedInspectionScopeTarget] = useState<InspectionScopeTarget | null>(null);
+  const [selectedInspectionOriginLabel, setSelectedInspectionOriginLabel] = useState<string | null>(null);
+  const [focusedProcurementUnitId, setFocusedProcurementUnitId] = useState<string | null>(null);
+  const [focusedProcurementStage, setFocusedProcurementStage] = useState<ProcurementFocus>('all');
+  const [focusedProcurementRequirementId, setFocusedProcurementRequirementId] = useState<string | null>(null);
+  const [focusedProcurementOriginLabel, setFocusedProcurementOriginLabel] = useState<string | null>(null);
 
   // Share Viewer State
   const [shareToken, setShareToken] = useState<string | null>(null);
 
   const { log } = useAuditLogger();
-  const { role } = useAppContext();
+  const { role, isLoaded: isSessionLoaded, session, permissions } = useAppContext();
+
+  const normalizeViewForRole = (nextView: string): AppView => {
+    if (!role) return 'inspections';
+    const candidateView = nextView as AppView;
+    return AuthPolicyService.canAccessView(permissions, candidateView)
+      ? candidateView
+      : AuthPolicyService.getDefaultViewForRole(role);
+  };
+
+  useEffect(() => {
+    setRecentWork(readRecentWork(role));
+  }, [role]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.sessionStorage.setItem(buildRecentWorkStorageKey(role), JSON.stringify(recentWork.slice(0, RECENT_WORK_LIMIT)));
+    } catch {
+      // Ignore session-scoped UI persistence failures.
+    }
+  }, [recentWork, role]);
+
+  const pushRecentWork = (entry: Omit<RecentWorkEntry, 'id'> | null) => {
+    if (!entry || !entry.unitId) return;
+    const nextEntry: RecentWorkEntry = {
+      ...entry,
+      label: entry.label.trim(),
+      detail: entry.detail?.trim() || null,
+      id: buildRecentWorkId(entry),
+    };
+    if (!nextEntry.label) return;
+    setRecentWork((current) => [nextEntry, ...current.filter((item) => item.id !== nextEntry.id)].slice(0, RECENT_WORK_LIMIT));
+  };
+
+  const openUnitWorkspace = (
+    unitId?: string | null,
+    context?: Omit<WorkspaceAttentionContext, 'unitId' | 'token'> | null,
+    recentLabel?: string | null
+  ) => {
+    setCurrentView('rooms');
+    setSelectedWorkspaceUnitId(unitId || null);
+    setSelectedWorkspaceAttentionContext(
+      unitId && context
+        ? {
+            unitId,
+            preferredTab: context.preferredTab || null,
+            inspectionId: context.inspectionId || null,
+            scopeSection: context.scopeSection || null,
+            scopeTarget: context.scopeTarget || null,
+            reasonLabel: context.reasonLabel || null,
+            reasonDetail: context.reasonDetail || null,
+            token: Date.now(),
+          }
+        : null
+    );
+    if (!unitId) return;
+    pushRecentWork({
+      surface: 'unit_workspace',
+      unitId,
+      preferredTab: context?.preferredTab || null,
+      inspectionId: context?.inspectionId || null,
+      scopeSection: context?.scopeSection || null,
+      scopeTarget: context?.scopeTarget || null,
+      label: recentLabel || context?.reasonLabel || 'Unit workspace',
+      detail: context?.reasonDetail || 'Return to the same unit context.',
+      originLabel: context?.reasonLabel || null,
+    });
+  };
+
+  const openInspection = (
+    options?: {
+      inspectionId?: string | null;
+      scopeSection?: InspectionScopeSection | null;
+      originContextLabel?: string | null;
+      scopeTarget?: InspectionScopeTarget | null;
+      unitId?: string | null;
+      recentLabel?: string | null;
+      recentDetail?: string | null;
+    }
+  ) => {
+    setCurrentView('inspections');
+    setSelectedUnitId(options?.inspectionId ? null : options?.unitId || null);
+    setSelectedInspectionId(options?.inspectionId || null);
+    setSelectedInspectionScopeSection(options?.scopeSection || null);
+    setSelectedInspectionScopeTarget(options?.scopeTarget || null);
+    setSelectedInspectionOriginLabel(options?.originContextLabel || null);
+    if (!options?.inspectionId || !options?.unitId) return;
+    pushRecentWork({
+      surface: 'inspection',
+      unitId: options.unitId,
+      inspectionId: options.inspectionId,
+      scopeSection: options.scopeSection || null,
+      scopeTarget: options.scopeTarget || null,
+      preferredTab: 'inspection',
+      label:
+        options.recentLabel ||
+        (options.scopeTarget
+          ? `Focused ${options.scopeTarget.entityType === 'material' ? 'material' : options.scopeTarget.entityType}`
+          : options.scopeSection
+            ? `${options.scopeSection[0].toUpperCase()}${options.scopeSection.slice(1)} in inspection`
+            : 'Inspection detail'),
+      detail:
+        options.recentDetail ||
+        trimRouteOriginLabel(options.originContextLabel) ||
+        'Return to the same inspection context.',
+      originLabel: options.originContextLabel || null,
+    });
+  };
+
+  const openProcurement = (
+    options?: {
+      unitId?: string | null;
+      focus?: ProcurementFocus;
+      requirementId?: string | null;
+      originLabel?: string | null;
+      recentLabel?: string | null;
+      recentDetail?: string | null;
+    }
+  ) => {
+    setFocusedProcurementUnitId(options?.unitId || null);
+    setFocusedProcurementStage(options?.focus || 'all');
+    setFocusedProcurementRequirementId(options?.requirementId || null);
+    setFocusedProcurementOriginLabel(options?.originLabel || null);
+    setCurrentView('procurement');
+    if (!options?.unitId || (options.focus || 'all') === 'all' && !options.requirementId && !options.originLabel) return;
+    pushRecentWork({
+      surface: 'procurement',
+      unitId: options.unitId,
+      procurementFocus: options.focus || 'all',
+      requirementId: options.requirementId || null,
+      preferredTab:
+        options.focus === 'vendor'
+          ? 'vendor'
+          : options.focus === 'receiving' || options.focus === 'verification'
+            ? 'verification'
+            : 'procurement',
+      label:
+        options.recentLabel ||
+        (options.requirementId
+          ? `${options.focus === 'verification' ? 'Verification' : options.focus === 'vendor' ? 'Vendor' : 'Procurement'} item`
+          : options.focus === 'verification'
+            ? 'Pending verification'
+            : options.focus === 'receiving'
+              ? 'Pending receiving'
+              : options.focus === 'vendor'
+                ? 'Vendor work'
+                : 'Procurement work'),
+      detail:
+        options.recentDetail ||
+        trimRouteOriginLabel(options.originLabel) ||
+        'Return to the same procurement queue.',
+      originLabel: options.originLabel || null,
+    });
+  };
+
+  const openRecentWork = (id: string) => {
+    const entry = recentWork.find((item) => item.id === id);
+    if (!entry) return;
+
+    if (entry.surface === 'inspection') {
+      openInspection({
+        unitId: entry.unitId,
+        inspectionId: entry.inspectionId || null,
+        scopeSection: entry.scopeSection || null,
+        scopeTarget: entry.scopeTarget || null,
+        originContextLabel: entry.originLabel || `Opened from Recent Work • ${entry.label}`,
+        recentLabel: entry.label,
+        recentDetail: entry.detail || null,
+      });
+      return;
+    }
+
+    if (entry.surface === 'procurement') {
+      openProcurement({
+        unitId: entry.unitId,
+        focus: entry.procurementFocus || 'all',
+        requirementId: entry.requirementId || null,
+        originLabel: entry.originLabel || `Opened from Recent Work • ${entry.label}`,
+        recentLabel: entry.label,
+        recentDetail: entry.detail || null,
+      });
+      return;
+    }
+
+    openUnitWorkspace(
+      entry.unitId,
+      {
+        preferredTab: entry.preferredTab || null,
+        inspectionId: entry.inspectionId || null,
+        scopeSection: entry.scopeSection || null,
+        scopeTarget: entry.scopeTarget || null,
+        reasonLabel: entry.label,
+        reasonDetail: entry.detail || null,
+      },
+      entry.label
+    );
+  };
 
   // Load data on mount + detect share link
   useEffect(() => {
@@ -72,7 +348,7 @@ const AppContent: React.FC = () => {
     const loadData = async () => {
       const stored = await getStoredData();
       setData(stored);
-      setIsLoaded(true);
+      setIsAppDataLoaded(true);
     };
 
     loadData();
@@ -86,10 +362,10 @@ const AppContent: React.FC = () => {
 
   // Save legacy AppState (rooms/products/templates) on change
   useEffect(() => {
-    if (isLoaded) {
+    if (isAppDataLoaded) {
       debouncedSave(data);
     }
-  }, [data, isLoaded, debouncedSave]);
+  }, [data, isAppDataLoaded, debouncedSave]);
 
   // Flush pending saves on unmount
   useEffect(() => {
@@ -111,46 +387,16 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     if (currentView === 'feedback-management' && role !== 'developer') {
-      setCurrentView('admin');
+      setCurrentView(AuthPolicyService.getDefaultViewForRole(role || 'manager'));
     }
   }, [currentView, role]);
 
-  const handleRoomSelect = (roomId: string) => {
-    setSelectedRoomId(roomId);
-    setCurrentView('room-detail');
-  };
-
-  const handleViewCategory = (category: string) => {
-    setActiveCategory(category);
-    setCurrentView('products');
-  };
-
-  const handleAddRoom = () => {
-    const name = prompt('Enter Room Name (e.g., Garage):');
-    if (name) {
-      const newRoom: Room = {
-        id: createId(),
-        name,
-        icon: 'Box',
-        description: 'Custom added area',
-        budget: 0,
-      };
-      setData((prev) => ({ ...prev, rooms: [...prev.rooms, newRoom] }));
-      log('ROOM_CREATED', { entityType: 'room', entityId: newRoom.id, message: `Created room: ${name}` });
+  useEffect(() => {
+    if (!role) return;
+    if (!AuthPolicyService.canAccessView(permissions, currentView as AppView)) {
+      setCurrentView(AuthPolicyService.getDefaultViewForRole(role));
     }
-  };
-
-  const handleUpdateRoom = (updatedRoom: Room) => {
-    setData((prev) => ({
-      ...prev,
-      rooms: prev.rooms.map((r) => (r.id === updatedRoom.id ? updatedRoom : r)),
-    }));
-    log('ROOM_UPDATED', {
-      entityType: 'room',
-      entityId: updatedRoom.id,
-      message: `Updated room: ${updatedRoom.name}`,
-    });
-  };
+  }, [currentView, permissions, role]);
 
   const handleAddProduct = (product: CatalogItem) => {
     setData((prev) => ({
@@ -174,16 +420,6 @@ const AppContent: React.FC = () => {
       entityId: updatedProduct.id,
       message: `Updated product: ${updatedProduct.name}`,
     });
-  };
-
-  const handleDeleteProduct = (productId: string) => {
-    if (confirm('Are you sure you want to delete this product?')) {
-      setData((prev) => ({
-        ...prev,
-        products: prev.products.filter((p) => p.id !== productId),
-      }));
-      log('CATALOG_ITEM_DELETED', { entityType: 'catalog_item', entityId: productId, message: 'Deleted product' });
-    }
   };
 
   // Repair Kit Handlers
@@ -252,25 +488,30 @@ const AppContent: React.FC = () => {
       );
     }
 
-    if (currentView === 'room-detail' && selectedRoomId) {
-      const room = data.rooms.find((r) => r.id === selectedRoomId);
-      if (room) {
-        return (
-          <RoomView
-            room={room}
-            products={data.products.filter((p) => p.roomId === room.id)}
-            onBack={() => {
-              setSelectedRoomId(null);
-              setCurrentView('dashboard');
-            }}
-            onAddProduct={handleAddProduct}
-            onUpdateProduct={handleUpdateProduct}
-            onDeleteProduct={handleDeleteProduct}
-            onUpdateRoom={handleUpdateRoom}
-            onViewCategory={handleViewCategory}
-          />
-        );
-      }
+    if (currentView === 'rooms') {
+      return (
+        <UnitWorkspace
+          initialUnitId={selectedWorkspaceUnitId}
+          initialAttentionContext={selectedWorkspaceAttentionContext}
+          recentWork={recentWork}
+          onOpenRecentWork={openRecentWork}
+          onOpenPortfolio={() => setCurrentView('unit-management')}
+          onOpenInspectionQueue={(unitId) => {
+            openInspection({ unitId });
+            setSelectedWorkspaceUnitId(unitId);
+            setSelectedWorkspaceAttentionContext(null);
+          }}
+          onOpenInspection={(inspectionId, scopeSection, originContextLabel, unitId, scopeTarget) =>
+            openInspection({
+              unitId: unitId || null,
+              inspectionId,
+              scopeSection: scopeSection || null,
+              scopeTarget: scopeTarget || null,
+              originContextLabel: originContextLabel || 'Opened from Unit Workspace',
+            })}
+          onOpenProcurement={(options) => openProcurement(options)}
+        />
+      );
     }
 
     if (currentView === 'inspections') {
@@ -284,7 +525,24 @@ const AppContent: React.FC = () => {
             onReturn={() => setSelectedInspectionId(null)}
             returnLabel="Return to Inspection"
           >
-            <InspectionDetail inspectionId={selectedInspectionId} onBack={() => setSelectedInspectionId(null)} />
+            <InspectionDetail
+              inspectionId={selectedInspectionId}
+              initialScopeSection={selectedInspectionScopeSection}
+              initialScopeTarget={selectedInspectionScopeTarget}
+              originContextLabel={selectedInspectionOriginLabel}
+              onOpenProcurement={(options) => openProcurement(options)}
+              onOpenUnitWorkspace={(unitId, context) => openUnitWorkspace(unitId, context)}
+              onPersistInspectionContext={(context) => {
+                setSelectedInspectionScopeSection(context.scopeSection || null);
+                setSelectedInspectionScopeTarget(context.scopeTarget || null);
+              }}
+              onBack={() => {
+                setSelectedInspectionId(null);
+                setSelectedInspectionScopeSection(null);
+                setSelectedInspectionScopeTarget(null);
+                setSelectedInspectionOriginLabel(null);
+              }}
+            />
           </ErrorBoundary>
         );
       }
@@ -300,9 +558,11 @@ const AppContent: React.FC = () => {
       return (
         <InspectionHome
           onSelectUnit={setSelectedUnitId}
+          onOpenPortfolio={() => setCurrentView('unit-management')}
           onResumeInspection={(inspectionId) => {
             setSelectedUnitId(null);
-            setSelectedInspectionId(inspectionId);
+            openInspection({ inspectionId, unitId: null });
+            setSelectedInspectionScopeTarget(null);
           }}
         />
       );
@@ -311,21 +571,33 @@ const AppContent: React.FC = () => {
     if (currentView === 'unit-management') {
       return (
         <UnitManagement
-          onOpenInspection={(inspectionId) => {
-            setCurrentView('inspections');
-            setSelectedUnitId(null);
-            setSelectedInspectionId(inspectionId);
-          }}
+          onOpenUnitWorkspace={(unitId, context) => openUnitWorkspace(unitId, context)}
           onOpenUnitInspections={(unitId) => {
-            setCurrentView('inspections');
-            setSelectedInspectionId(null);
-            setSelectedUnitId(unitId);
+            setSelectedWorkspaceUnitId(unitId);
+            openInspection({ unitId });
           }}
+          onOpenInspection={(inspectionId, scopeSection, originContextLabel, scopeTarget) =>
+            openInspection({
+              unitId: selectedWorkspaceUnitId,
+              inspectionId,
+              scopeSection: scopeSection || null,
+              scopeTarget: scopeTarget || null,
+              originContextLabel: originContextLabel || 'Opened from Portfolio',
+            })}
         />
       );
     }
     
     if (currentView === 'admin') {
+      if (!AuthPolicyService.canAccessView(permissions, 'admin')) {
+        return (
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-xl font-semibold text-slate-900">Admin access required</h2>
+            <p className="mt-2 text-sm text-slate-600">This surface is not available for the current local session.</p>
+          </div>
+        );
+      }
+
       return (
         <AdminRetentionPanel
           onOpenFeedbackManagement={role === 'developer' ? () => setCurrentView('feedback-management') : undefined}
@@ -342,22 +614,52 @@ const AppContent: React.FC = () => {
     }
 
     if (currentView === 'templates') {
+      if (!AuthPolicyService.canAccessView(permissions, 'templates')) {
+        return (
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-xl font-semibold text-slate-900">Template access is unavailable</h2>
+            <p className="mt-2 text-sm text-slate-600">The current local role cannot manage templates.</p>
+          </div>
+        );
+      }
       return <TemplateManager />;
     }
 
     if (currentView === 'procurement') {
-      return <ProcurementWorkspace />;
+      return (
+        <ProcurementWorkspace
+          focusedUnitId={focusedProcurementUnitId}
+          initialFocus={focusedProcurementStage}
+          focusedRequirementId={focusedProcurementRequirementId}
+          originContextLabel={focusedProcurementOriginLabel}
+          onOpenInspectionScope={(inspectionId, scopeSection, originContextLabel, scopeTarget) =>
+            openInspection({
+              unitId: focusedProcurementUnitId,
+              inspectionId,
+              scopeSection: scopeSection || null,
+              scopeTarget: scopeTarget || null,
+              originContextLabel: originContextLabel || 'Opened from Procurement',
+            })}
+          onClearUnitFocus={() => {
+            setFocusedProcurementUnitId(null);
+            setFocusedProcurementStage('all');
+            setFocusedProcurementRequirementId(null);
+            setFocusedProcurementOriginLabel(null);
+          }}
+        />
+      );
     }
 
     // Default to rooms/dashboard view logic
     return (
-      <Dashboard 
-        rooms={data.rooms} 
-        products={data.products} 
-        onSelectRoom={handleRoomSelect} 
-        onAddRoom={handleAddRoom} 
-        onViewInspections={() => setCurrentView('inspections')}
-      />
+        <Dashboard
+          recentWork={recentWork}
+          onOpenRecentWork={openRecentWork}
+          onOpenPortfolio={() => setCurrentView('unit-management')}
+          onOpenInspection={(options) => openInspection(options)}
+          onOpenProcurement={(options) => openProcurement(options)}
+          onOpenUnitWorkspace={(unitId, context) => openUnitWorkspace(unitId || null, context)}
+        />
     );
   };
 
@@ -366,17 +668,36 @@ const AppContent: React.FC = () => {
     return <ShareLinkViewer token={shareToken} />;
   }
 
+  if (!isSessionLoaded) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-sm text-slate-200">
+        Loading local session…
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <LocalSignInScreen />;
+  }
+
   return (
     <Layout
-      activeTab={currentView === 'room-detail' ? 'rooms' : currentView}
+      activeTab={currentView}
       onTabChange={(tab) => {
-        setCurrentView(tab);
-        setSelectedRoomId(null);
+        setCurrentView(normalizeViewForRole(tab));
+        setSelectedWorkspaceUnitId(null);
 
-        // Reset inspection flow state when leaving the operational inspection tab.
-        if (tab !== 'inspections') {
+        // Inspection navigation always returns to the operational launch surface.
+        if (tab === 'inspections') {
           setSelectedUnitId(null);
           setSelectedInspectionId(null);
+          setSelectedInspectionScopeSection(null);
+          setSelectedInspectionOriginLabel(null);
+        } else {
+          setSelectedUnitId(null);
+          setSelectedInspectionId(null);
+          setSelectedInspectionScopeSection(null);
+          setSelectedInspectionOriginLabel(null);
         }
 
         if (tab === 'products') {
@@ -390,17 +711,18 @@ const AppContent: React.FC = () => {
         contextIds={{
           unitId: selectedUnitId || undefined,
           inspectionId: selectedInspectionId || undefined,
-          roomId: selectedRoomId || undefined,
         }}
-        resetKeys={[currentView, selectedUnitId, selectedInspectionId, selectedRoomId, activeCategory]}
+        resetKeys={[currentView, selectedUnitId, selectedInspectionId, selectedWorkspaceUnitId, activeCategory]}
         onReturn={() => {
-          setCurrentView('dashboard');
-          setSelectedRoomId(null);
+          setCurrentView('inspections');
+          setSelectedWorkspaceUnitId(null);
           setSelectedUnitId(null);
           setSelectedInspectionId(null);
+          setSelectedInspectionScopeSection(null);
+          setSelectedInspectionOriginLabel(null);
           setActiveCategory(null);
         }}
-        returnLabel="Return to Dashboard"
+        returnLabel="Return to Inspection"
       >
         {renderContent()}
       </ErrorBoundary>

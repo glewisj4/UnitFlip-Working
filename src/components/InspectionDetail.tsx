@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ArrowLeft, Save, Camera, Trash2, Loader2, FileText, Download, AlertCircle, Share2, Copy, XCircle, Clock, CheckCircle2, Wrench, PackagePlus, TriangleAlert, StickyNote, ChevronDown } from 'lucide-react';
 import { Inspection, InspectionStatus } from '../core/models/inspections';
 import { InspectionService } from '../core/services/InspectionService';
@@ -37,9 +37,44 @@ import {
 import { InspectionCaptureCommitService } from '../core/services/InspectionCaptureCommitService';
 import { ClientLoggerService } from '../core/services/ClientLoggerService';
 import { ErrorBoundary } from './ErrorBoundary';
+import { UnitService } from '../core/services/UnitService';
+import { Unit } from '../core/models/inspections';
+import { ProductRecommendationPanel } from './ProductRecommendationPanel';
+import { ProductRecommendationService } from '../core/services/ProductRecommendationService';
 
 interface InspectionDetailProps {
   inspectionId: string;
+  initialScopeSection?: 'findings' | 'tasks' | 'materials' | null;
+  initialScopeTarget?: {
+    entityType: 'finding' | 'task' | 'material';
+    entityId: string;
+    originLabel?: string | null;
+  } | null;
+  originContextLabel?: string | null;
+  onOpenProcurement?: (options?: { unitId?: string; focus?: 'all' | 'procurement' | 'vendor' | 'receiving' | 'verification' }) => void;
+  onOpenUnitWorkspace?: (
+    unitId: string,
+    context?: {
+      preferredTab?: 'overview' | 'inspection' | 'scope' | 'procurement' | 'vendor' | 'verification' | null;
+      inspectionId?: string | null;
+      scopeSection?: 'findings' | 'tasks' | 'materials' | null;
+      scopeTarget?: {
+        entityType: 'finding' | 'task' | 'material';
+        entityId: string;
+        originLabel?: string | null;
+      } | null;
+      reasonLabel?: string | null;
+      reasonDetail?: string | null;
+    }
+  ) => void;
+  onPersistInspectionContext?: (context: {
+    scopeSection?: 'findings' | 'tasks' | 'materials' | null;
+    scopeTarget?: {
+      entityType: 'finding' | 'task' | 'material';
+      entityId: string;
+      originLabel?: string | null;
+    } | null;
+  }) => void;
   onBack: () => void;
 }
 
@@ -138,19 +173,60 @@ const normalizeCaptureKind = (value: unknown, fallback: InspectionCaptureKind): 
   return fallback;
 };
 
+const buildCaptureBridgeMessage = (
+  draft: InspectionCaptureDraft,
+  committed: { entityType: 'finding' | 'task'; entityId: string }
+) => {
+  if (committed.entityType === 'finding') {
+    if (draft.checklistContext?.checklistOrigin) {
+      return 'Finding created from checklist issue. It now appears in Findings and can drive repair tasks and materials next.';
+    }
+
+    if (draft.source === 'photo') {
+      return 'Finding created from photo capture. It now appears in Findings with evidence attached and can drive repair tasks next.';
+    }
+
+    return 'Finding created. It now appears in Findings and can drive repair tasks and materials next.';
+  }
+
+  return 'Repair task created from capture. It now appears in scope and can drive material requirements next.';
+};
+
+const createFocusedScopeRecord = (
+  entityType: 'finding' | 'task' | 'material',
+  entityId: string,
+  originLabel?: string | null
+) => ({
+  entityType,
+  entityId,
+  token: Date.now(),
+  originLabel: originLabel || null,
+});
+
 const createChecklistPhotoDraftId = () => `checklist_photo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const createFeedEditPhotoDraftId = () => `feed_edit_photo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const buildChecklistDraftSessionStorageKey = (inspectionId: string) => `unitflip:inspection:${inspectionId}:checklist-drafts:v1`;
 
-export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId, onBack }) => {
+export const InspectionDetail: React.FC<InspectionDetailProps> = ({
+  inspectionId,
+  initialScopeSection = null,
+  initialScopeTarget = null,
+  originContextLabel = null,
+  onOpenProcurement,
+  onOpenUnitWorkspace,
+  onPersistInspectionContext,
+  onBack,
+}) => {
   const { org, user, flags } = useAppContext();
   const { log } = useAuditLogger();
   const { triggerSyncNow } = useSyncEngine();
   const { addCatalogItemToList } = useCatalog();
   const [inspection, setInspection] = useState<Inspection | null>(null);
+  const [unitRecord, setUnitRecord] = useState<Unit | null>(null);
   const [photos, setPhotos] = useState<PhotoAsset[]>([]);
   const [productInstances, setProductInstances] = useState<ProductInstance[]>([]);
   const [catalogItems, setCatalogItems] = useState<Record<string, CatalogItem>>({});
+  const [catalogLibrary, setCatalogLibrary] = useState<CatalogItem[]>([]);
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -160,6 +236,15 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
   const [findings, setFindings] = useState<Finding[]>([]);
   const [repairTasks, setRepairTasks] = useState<RepairTask[]>([]);
   const [checklistMessage, setChecklistMessage] = useState<string | null>(null);
+  const [captureBridgeMessage, setCaptureBridgeMessage] = useState<string | null>(null);
+  const [captureBridgeTarget, setCaptureBridgeTarget] = useState<{ entityType: 'finding' | 'task'; entityId: string } | null>(null);
+  const [inspectionIntelligenceRefreshToken, setInspectionIntelligenceRefreshToken] = useState(0);
+  const [focusedScopeRecord, setFocusedScopeRecord] = useState<{
+    entityType: 'finding' | 'task' | 'material';
+    entityId: string;
+    token: number;
+    originLabel?: string | null;
+  } | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<string>('');
   const [selectedCaptureAction, setSelectedCaptureAction] = useState<InspectionCaptureAction>('note');
   const [pendingCaptureDraft, setPendingCaptureDraft] = useState<InspectionCaptureDraft | null>(null);
@@ -175,6 +260,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
   const checklistDraftsRef = useRef<Record<string, ChecklistDraftCaptureState>>({});
   const feedEditStagedPhotosRef = useRef<FeedEditStagedPhoto[]>([]);
   const hasHydratedChecklistDraftsRef = useRef(false);
+  const recommendationLogKeysRef = useRef<Set<string>>(new Set());
   
   // Share state
   const [shareLinks, setShareLinks] = useState<ShareLink[]>([]);
@@ -222,6 +308,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
       loadInspection();
       loadLatestReport();
       loadProductInstances();
+      loadCatalogLibrary();
       loadFindings();
       loadRepairTasks();
       if (flags?.public_share_links) {
@@ -268,6 +355,22 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
       setSelectedRoomId(firstRoomId);
     }
   }, [generatedSections, selectedRoomId]);
+
+  useEffect(() => {
+    setCaptureBridgeMessage(null);
+    setCaptureBridgeTarget(null);
+  }, [selectedRoomId]);
+
+  useEffect(() => {
+    if (!initialScopeTarget) return;
+    setFocusedScopeRecord(
+      createFocusedScopeRecord(
+        initialScopeTarget.entityType,
+        initialScopeTarget.entityId,
+        initialScopeTarget.originLabel || originContextLabel || 'Opened from a connected workflow'
+      )
+    );
+  }, [initialScopeTarget, originContextLabel]);
 
   useEffect(() => {
     checklistDraftsRef.current = checklistDraftsByItemId;
@@ -440,6 +543,8 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
     const found = list.find(i => i.id === inspectionId);
     if (found) {
       setInspection(found);
+      const loadedUnit = await UnitService.getUnit(org.id, found.unitId);
+      setUnitRecord(loadedUnit);
       setTitle(found.title);
       setStatus(found.status);
       setNotes(found.notes || '');
@@ -467,6 +572,12 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
     await loadCatalogItemsForInstances(instances);
   };
 
+  const loadCatalogLibrary = async () => {
+    if (!org) return;
+    const items = await CatalogService.getItems(org.id);
+    setCatalogLibrary(items);
+  };
+
   const loadFindings = async () => {
     if (!org) return;
     const nextFindings = await FindingService.listFindings(org.id, { inspectionId });
@@ -481,6 +592,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
 
   const refreshCaptureData = async () => {
     await Promise.all([loadFindings(), loadRepairTasks()]);
+    setInspectionIntelligenceRefreshToken((current) => current + 1);
   };
 
   const loadCatalogItemsForInstances = async (instances: ProductInstance[]) => {
@@ -856,7 +968,10 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
         )
       );
 
-      setChecklistMessage('Finding created from checklist item. Save inspection changes to persist checklist links.');
+      setChecklistMessage('Finding created from checklist issue. It now appears in Findings and can drive repair tasks next. Save inspection changes to persist checklist links.');
+      setCaptureBridgeMessage('Checklist issue converted into a structured finding. Open the linked finding or generate repair tasks when you are ready.');
+      setCaptureBridgeTarget({ entityType: 'finding', entityId: createdFinding.id });
+      setFocusedScopeRecord(createFocusedScopeRecord('finding', createdFinding.id, 'Created from checklist'));
     } catch (error) {
       console.error(error);
       setChecklistMessage(error instanceof Error ? error.message : 'Failed to create finding from checklist item.');
@@ -880,6 +995,32 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
       roomLabel: activeRoom?.label || 'Unit Overview',
       roomType: activeRoom?.subtitle,
     };
+  };
+
+  const deriveScopeSectionFromTarget = (target?: { entityType: 'finding' | 'task' | 'material' } | null) => {
+    if (!target) return initialScopeSection || null;
+    if (target.entityType === 'finding') return 'findings';
+    if (target.entityType === 'task') return 'tasks';
+    return 'materials';
+  };
+
+  const persistInspectionContext = (overrideTarget?: {
+    entityType: 'finding' | 'task' | 'material';
+    entityId: string;
+    originLabel?: string | null;
+  } | null) => {
+    const target = overrideTarget || (focusedScopeRecord
+      ? {
+          entityType: focusedScopeRecord.entityType,
+          entityId: focusedScopeRecord.entityId,
+          originLabel: focusedScopeRecord.originLabel || originContextLabel,
+        }
+      : initialScopeTarget);
+
+    onPersistInspectionContext?.({
+      scopeSection: deriveScopeSectionFromTarget(target),
+      scopeTarget: target || null,
+    });
   };
 
   const buildVoiceMetadata = (
@@ -1003,12 +1144,15 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
       return;
     }
 
-    await InspectionCaptureCommitService.commitDraft(
+    const committed = await InspectionCaptureCommitService.commitDraft(
       commitContext,
       draft
     );
 
     setPendingCaptureDraft(null);
+    setCaptureBridgeMessage(buildCaptureBridgeMessage(draft, committed));
+    setCaptureBridgeTarget({ entityType: committed.entityType, entityId: committed.entityId });
+    setFocusedScopeRecord(createFocusedScopeRecord(committed.entityType, committed.entityId, 'Created from capture'));
     await refreshCaptureData();
   };
 
@@ -1032,10 +1176,13 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
         requiresReview: false,
       };
 
-      await InspectionCaptureCommitService.commitDraft(
+      const committed = await InspectionCaptureCommitService.commitDraft(
         commitContext,
         noteDraft
       );
+      setCaptureBridgeMessage(buildCaptureBridgeMessage(noteDraft, committed));
+      setCaptureBridgeTarget({ entityType: committed.entityType, entityId: committed.entityId });
+      setFocusedScopeRecord(createFocusedScopeRecord(committed.entityType, committed.entityId, 'Created from photo capture'));
       await refreshCaptureData();
     }
   };
@@ -1075,6 +1222,9 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
         );
       }
 
+      setCaptureBridgeMessage(buildCaptureBridgeMessage(pendingCaptureDraft, committed));
+      setCaptureBridgeTarget({ entityType: committed.entityType, entityId: committed.entityId });
+      setFocusedScopeRecord(createFocusedScopeRecord(committed.entityType, committed.entityId, 'Created from reviewed capture'));
       setPendingCaptureDraft(null);
       await refreshCaptureData();
     } catch (error) {
@@ -1225,6 +1375,9 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
         })
       );
 
+      setCaptureBridgeMessage(buildCaptureBridgeMessage(noteDraft, committed));
+      setCaptureBridgeTarget({ entityType: committed.entityType, entityId: committed.entityId });
+      setFocusedScopeRecord(createFocusedScopeRecord(committed.entityType, committed.entityId, 'Created from voice capture'));
       await refreshCaptureData();
     } catch (error) {
       ClientLoggerService.error(
@@ -2089,6 +2242,158 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
     await refreshCaptureData();
   };
 
+  const activeEditingFinding = useMemo(
+    () =>
+      editingFeedDraft?.existingEntityType === 'finding'
+        ? findings.find((entry) => entry.id === editingFeedDraft.existingEntityId) || null
+        : null,
+    [editingFeedDraft, findings]
+  );
+
+  const activeEditingTask = useMemo(
+    () =>
+      editingFeedDraft?.existingEntityType === 'task'
+        ? repairTasks.find((entry) => entry.id === editingFeedDraft.existingEntityId) || null
+        : null,
+    [editingFeedDraft, repairTasks]
+  );
+
+  const draftRecommendationResult = useMemo(
+    () =>
+      pendingCaptureDraft
+        ? ProductRecommendationService.recommendProducts(catalogLibrary, {
+            sourceType: 'draft',
+            label: pendingCaptureDraft.label,
+            rawText: pendingCaptureDraft.rawText,
+            notes: pendingCaptureDraft.notes,
+            kind: pendingCaptureDraft.kind,
+            roomLabel: pendingCaptureDraft.roomLabel,
+            roomType: pendingCaptureDraft.roomType,
+            trade: pendingCaptureDraft.inferredTrade,
+            unitFavoriteProductIds: unitRecord?.favoriteProductIds || [],
+          })
+        : null,
+    [catalogLibrary, pendingCaptureDraft, unitRecord]
+  );
+
+  const feedRecommendationResult = useMemo(
+    () =>
+      editingFeedDraft
+        ? ProductRecommendationService.recommendProducts(catalogLibrary, {
+            sourceType: editingFeedDraft.existingEntityType || editingFeedDraft.persistenceTarget,
+            label: editingFeedDraft.label,
+            rawText: editingFeedDraft.rawText,
+            notes: editingFeedDraft.notes,
+            kind: editingFeedDraft.kind,
+            roomLabel: editingFeedDraft.roomLabel,
+            roomType: editingFeedDraft.roomType,
+            category: activeEditingFinding?.category,
+            trade: activeEditingFinding?.recommendedTrade || activeEditingTask?.trade || editingFeedDraft.inferredTrade,
+            unitFavoriteProductIds: unitRecord?.favoriteProductIds || [],
+          })
+        : null,
+    [activeEditingFinding, activeEditingTask, catalogLibrary, editingFeedDraft, unitRecord]
+  );
+
+  useEffect(() => {
+    if (!pendingCaptureDraft || !draftRecommendationResult || !org) return;
+    const logKey = `draft:${pendingCaptureDraft.id}`;
+    if (recommendationLogKeysRef.current.has(logKey)) return;
+    recommendationLogKeysRef.current.add(logKey);
+
+    if (draftRecommendationResult.suggestedProducts.length === 0) {
+      ClientLoggerService.info('No product recommendation match for capture draft.', {
+        ...buildInspectionLogContext({
+          eventType: 'product_recommendation.no_match',
+          metadata: {
+            sourceType: 'draft',
+            inferredCategory: draftRecommendationResult.inferredTopLevelCategory,
+            inferredSubcategory: draftRecommendationResult.inferredSubcategory,
+            inferredEquivalentGroup: draftRecommendationResult.inferredEquivalentGroup,
+          },
+        }),
+      });
+      return;
+    }
+
+    ClientLoggerService.info('Product recommendations generated for capture draft.', {
+      ...buildInspectionLogContext({
+        eventType: 'product_recommendation.generated',
+        metadata: {
+          sourceType: 'draft',
+          resultCount: draftRecommendationResult.suggestedProducts.length,
+          alternateCount: draftRecommendationResult.alternateProducts.length,
+          inferredCategory: draftRecommendationResult.inferredTopLevelCategory,
+          inferredSubcategory: draftRecommendationResult.inferredSubcategory,
+          inferredEquivalentGroup: draftRecommendationResult.inferredEquivalentGroup,
+        },
+      }),
+    });
+  }, [draftRecommendationResult, org, pendingCaptureDraft]);
+
+  useEffect(() => {
+    if (!editingFeedDraft || !feedRecommendationResult || !org) return;
+    const logKey = `feed:${editingFeedDraft.existingEntityType || editingFeedDraft.persistenceTarget}:${editingFeedDraft.existingEntityId || editingFeedDraft.id}`;
+    if (recommendationLogKeysRef.current.has(logKey)) return;
+    recommendationLogKeysRef.current.add(logKey);
+
+    if (feedRecommendationResult.suggestedProducts.length === 0) {
+      ClientLoggerService.info('No product recommendation match for captured item.', {
+        ...buildInspectionLogContext({
+          eventType: 'product_recommendation.no_match',
+          metadata: {
+            sourceType: editingFeedDraft.existingEntityType || editingFeedDraft.persistenceTarget,
+            inferredCategory: feedRecommendationResult.inferredTopLevelCategory,
+            inferredSubcategory: feedRecommendationResult.inferredSubcategory,
+            inferredEquivalentGroup: feedRecommendationResult.inferredEquivalentGroup,
+          },
+        }),
+      });
+      return;
+    }
+
+    ClientLoggerService.info('Product recommendations generated for captured item.', {
+      ...buildInspectionLogContext({
+        eventType: 'product_recommendation.generated',
+        metadata: {
+          sourceType: editingFeedDraft.existingEntityType || editingFeedDraft.persistenceTarget,
+          resultCount: feedRecommendationResult.suggestedProducts.length,
+          alternateCount: feedRecommendationResult.alternateProducts.length,
+          inferredCategory: feedRecommendationResult.inferredTopLevelCategory,
+          inferredSubcategory: feedRecommendationResult.inferredSubcategory,
+          inferredEquivalentGroup: feedRecommendationResult.inferredEquivalentGroup,
+        },
+      }),
+    });
+  }, [editingFeedDraft, feedRecommendationResult, org]);
+
+  const handleAddRecommendedProduct = async (item: CatalogItem, source: 'suggested' | 'alternate') => {
+    if (!org) return;
+    await handleAddProduct(item);
+    ClientLoggerService.info('Recommended product added to inspection.', {
+      ...buildInspectionLogContext({
+        eventType: 'product_recommendation.clicked',
+        metadata: {
+          source,
+          catalogItemId: item.id,
+          productName: item.name,
+          equivalentGroup: item.equivalentGroup,
+        },
+      }),
+    });
+  };
+
+  const handleRecommendationAlternatesOpened = (equivalentGroup: string) => {
+    ClientLoggerService.info('Recommendation alternates opened.', {
+      ...buildInspectionLogContext({
+        eventType: 'product_recommendation.alternate_opened',
+        metadata: {
+          equivalentGroup,
+        },
+      }),
+    });
+  };
+
   if (!inspection) return null;
 
   const checklistSummary = createInspectionOperationalSummary(
@@ -2366,6 +2671,27 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
     return bTime - aTime;
   });
 
+  const draftRecommendationPanel =
+    pendingCaptureDraft && draftRecommendationResult ? (
+      <ProductRecommendationPanel
+        result={draftRecommendationResult}
+        existingCatalogItemIds={productInstances.map((instance) => instance.catalogItemId)}
+        onAddProduct={handleAddRecommendedProduct}
+        onAlternatesOpened={handleRecommendationAlternatesOpened}
+      />
+    ) : null;
+
+  const feedRecommendationPanel =
+    editingFeedDraft && feedRecommendationResult ? (
+      <ProductRecommendationPanel
+        result={feedRecommendationResult}
+        existingCatalogItemIds={productInstances.map((instance) => instance.catalogItemId)}
+        disabled={isFeedEditSaveBusy}
+        onAddProduct={handleAddRecommendedProduct}
+        onAlternatesOpened={handleRecommendationAlternatesOpened}
+      />
+    ) : null;
+
   const handleSelectRoom = (roomId: string) => {
     setSelectedRoomId(roomId);
     setExpandedChecklistItemId(null);
@@ -2410,7 +2736,14 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
             <button onClick={handleProtectedBack} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
             <ArrowLeft size={20} className="text-slate-600" />
             </button>
-            <h2 className="text-xl font-bold text-slate-800">Edit Inspection</h2>
+            <div>
+              <h2 className="text-xl font-bold text-slate-800">Edit Inspection</h2>
+              {originContextLabel ? (
+                <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-800">
+                  {originContextLabel}
+                </div>
+              ) : null}
+            </div>
         </div>
         <button
             onClick={handleSave}
@@ -2435,46 +2768,71 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
           onReturn={handleProtectedBack}
           returnLabel="Return to Inspection"
         >
-          <InspectionRoomWorkspace
-            inspectionTitle={title}
-            room={currentRoom}
-            roomIndex={currentRoomIndex}
-            roomCount={roomWorkspaceRooms.length}
-            onBack={handleProtectedBack}
-            onPreviousRoom={handlePreviousRoom}
-            onNextRoom={handleNextRoom}
-            onSelectRoom={handleSelectRoom}
-            rooms={roomWorkspaceRooms}
-            checklistSummaryLabel={`${checklistSummary.completedCount}/${checklistSummary.total} complete • ${checklistSummary.failedCount} failed • ${checklistSummary.blockedCount} blocked`}
-            captureStrip={
-              <InspectionCaptureStrip
-                selectedAction={selectedCaptureAction}
-                onActionChange={setSelectedCaptureAction}
-                onSubmit={handleCaptureSubmit}
-                onPhotoCapture={handleWorkspacePhotoCapture}
-                draft={pendingCaptureDraft}
-                roomOptions={roomOptions}
-                onDraftChange={setPendingCaptureDraft}
-                onDraftCommit={handlePendingDraftCommit}
-                onDraftCancel={() => setPendingCaptureDraft(null)}
-                onVoiceParseReview={handleVoiceParseReview}
-                onVoiceSaveNote={handleVoiceSaveAsNote}
-                voiceLogContext={{
-                  orgId: org?.id,
-                  userId: user?.id,
-                  inspectionId,
-                  roomId: buildRoomContext().roomId,
-                  roomLabel: buildRoomContext().roomLabel,
-                }}
-                isUploading={isUploading}
-              />
-            }
-            checklistPanel={
-              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="space-y-4">
+            {captureBridgeMessage ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                <div className="font-semibold">Structured scope updated</div>
+                <div className="mt-1 text-emerald-800">{captureBridgeMessage}</div>
+                {captureBridgeTarget ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFocusedScopeRecord(
+                        createFocusedScopeRecord(
+                          captureBridgeTarget.entityType,
+                          captureBridgeTarget.entityId,
+                          'Opened from capture confirmation'
+                        )
+                      )
+                    }
+                    className="mt-3 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
+                  >
+                    Open created {captureBridgeTarget.entityType === 'task' ? 'repair task' : captureBridgeTarget.entityType}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <InspectionRoomWorkspace
+              inspectionTitle={title}
+              room={currentRoom}
+              roomIndex={currentRoomIndex}
+              roomCount={roomWorkspaceRooms.length}
+              onBack={handleProtectedBack}
+              onPreviousRoom={handlePreviousRoom}
+              onNextRoom={handleNextRoom}
+              onSelectRoom={handleSelectRoom}
+              rooms={roomWorkspaceRooms}
+              checklistSummaryLabel={`${checklistSummary.completedCount}/${checklistSummary.total} complete • ${checklistSummary.failedCount} failed • ${checklistSummary.blockedCount} blocked`}
+              captureStrip={
+                <InspectionCaptureStrip
+                  selectedAction={selectedCaptureAction}
+                  onActionChange={setSelectedCaptureAction}
+                  onSubmit={handleCaptureSubmit}
+                  onPhotoCapture={handleWorkspacePhotoCapture}
+                  draft={pendingCaptureDraft}
+                  roomOptions={roomOptions}
+                  onDraftChange={setPendingCaptureDraft}
+                  onDraftCommit={handlePendingDraftCommit}
+                  onDraftCancel={() => setPendingCaptureDraft(null)}
+                  onVoiceParseReview={handleVoiceParseReview}
+                  onVoiceSaveNote={handleVoiceSaveAsNote}
+                  voiceLogContext={{
+                    orgId: org?.id,
+                    userId: user?.id,
+                    inspectionId,
+                    roomId: buildRoomContext().roomId,
+                    roomLabel: buildRoomContext().roomLabel,
+                  }}
+                  isUploading={isUploading}
+                  recommendationPanel={draftRecommendationPanel}
+                />
+              }
+              checklistPanel={
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-3 flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-semibold text-slate-900">Room Checklist</h3>
-                  <p className="text-sm text-slate-500">Operational checklist for the current room with draft and completion visibility.</p>
+                  <p className="text-sm text-slate-500">Operational checklist for the current room. Failed or blocked items can turn directly into structured findings.</p>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   {hasUnsavedChecklistDrafts ? (
@@ -2959,48 +3317,50 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
                   ))}
                 </div>
               )}
-              </section>
-            }
-            feed={
-              <ErrorBoundary
-                surfaceName="captured-items-feed"
-                screenName="InspectionDetail"
-                contextIds={{
-                  orgId: org?.id,
-                  inspectionId,
-                  roomId: selectedRoomId || undefined,
-                  checklistItemId: editingFeedDraft?.checklistContext?.checklistItemId,
-                }}
-                resetKeys={[inspectionId, selectedRoomId, expandedFeedItemId, editingFeedDraft?.existingEntityId]}
-                onReturn={handleCancelFeedEdit}
-                returnLabel="Close Feed Editor"
-              >
-                <RoomCapturedItemsFeed
-                  items={currentRoomFeedItems}
-                  roomOptions={roomOptions}
-                  editingDraft={editingFeedDraft}
-                  expandedItemId={expandedFeedItemId}
-                  photoPreviewUrls={previews}
-                  stagedPhotos={feedEditStagedPhotos.map((photo) => ({
-                    id: photo.id,
-                    previewUrl: photo.previewUrl,
-                    fileName: photo.file.name,
-                  }))}
-                  pendingRemovedPhotoIds={feedEditPendingRemovedPhotoIds}
-                  saveState={feedEditSaveState}
-                  isSaving={isFeedEditSaveBusy}
-                  onToggleExpand={handleToggleFeedItem}
-                  onDraftChange={handleFeedDraftChange}
-                  onStagePhoto={handleStageFeedEditPhoto}
-                  onRemoveStagedPhoto={handleRemoveFeedEditStagedPhoto}
-                  onToggleSavedPhotoRemoval={handleToggleSavedFeedEditPhotoRemoval}
-                  onSaveDraft={handleSaveFeedDraft}
-                  onCancelEdit={handleCancelFeedEdit}
-                  onDeleteItem={handleDeleteFeedItem}
-                />
-              </ErrorBoundary>
-            }
-          />
+                </section>
+              }
+              feed={
+                <ErrorBoundary
+                  surfaceName="captured-items-feed"
+                  screenName="InspectionDetail"
+                  contextIds={{
+                    orgId: org?.id,
+                    inspectionId,
+                    roomId: selectedRoomId || undefined,
+                    checklistItemId: editingFeedDraft?.checklistContext?.checklistItemId,
+                  }}
+                  resetKeys={[inspectionId, selectedRoomId, expandedFeedItemId, editingFeedDraft?.existingEntityId]}
+                  onReturn={handleCancelFeedEdit}
+                  returnLabel="Close Feed Editor"
+                >
+                  <RoomCapturedItemsFeed
+                    items={currentRoomFeedItems}
+                    roomOptions={roomOptions}
+                    editingDraft={editingFeedDraft}
+                    expandedItemId={expandedFeedItemId}
+                    photoPreviewUrls={previews}
+                    stagedPhotos={feedEditStagedPhotos.map((photo) => ({
+                      id: photo.id,
+                      previewUrl: photo.previewUrl,
+                      fileName: photo.file.name,
+                    }))}
+                    pendingRemovedPhotoIds={feedEditPendingRemovedPhotoIds}
+                    saveState={feedEditSaveState}
+                    isSaving={isFeedEditSaveBusy}
+                    onToggleExpand={handleToggleFeedItem}
+                    onDraftChange={handleFeedDraftChange}
+                    onStagePhoto={handleStageFeedEditPhoto}
+                    onRemoveStagedPhoto={handleRemoveFeedEditStagedPhoto}
+                    onToggleSavedPhotoRemoval={handleToggleSavedFeedEditPhotoRemoval}
+                    onSaveDraft={handleSaveFeedDraft}
+                    onCancelEdit={handleCancelFeedEdit}
+                    onDeleteItem={handleDeleteFeedItem}
+                    recommendationPanel={feedRecommendationPanel}
+                  />
+                </ErrorBoundary>
+              }
+            />
+          </div>
         </ErrorBoundary>
 
         {/* Basic Info */}
@@ -3186,12 +3546,35 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
                                   disabled={(item.findingIds?.length || 0) > 0 || (item.status !== 'failed' && item.status !== 'blocked')}
                                   className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-40"
                                 >
-                                  {(item.findingIds?.length || 0) > 0 ? 'Finding Created' : 'Create Finding'}
+                                  {(item.findingIds?.length || 0) > 0 ? 'Finding Created' : 'Create Structured Finding'}
                                 </button>
                                 {(item.findingIds?.length || 0) > 0 ? (
                                   <span className="text-xs text-slate-500">
                                     Linked findings: {item.findingIds?.length || 0}
                                   </span>
+                                ) : item.status === 'failed' || item.status === 'blocked' ? (
+                                  <span className="text-xs text-slate-500">
+                                    Failed or blocked checklist items can become findings in one step.
+                                  </span>
+                                ) : null}
+                                {(item.findingIds?.length || 0) > 0 ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setFocusedScopeRecord(
+                                        createFocusedScopeRecord(
+                                          'finding',
+                                          item.findingIds?.[0] || '',
+                                          'Opened from checklist row'
+                                        )
+                                      )
+                                    }
+                                    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                                  >
+                                    Open Finding
+                                  </button>
+                                ) : item.status === 'failed' || item.status === 'blocked' ? (
+                                  <span />
                                 ) : null}
                               </div>
                             </div>
@@ -3329,6 +3712,33 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({ inspectionId
           }}
           photos={photos}
           previews={previews}
+          refreshToken={inspectionIntelligenceRefreshToken}
+          initialFocusSection={initialScopeSection}
+          focusedScopeRecord={focusedScopeRecord}
+          onOpenProcurement={(options) => {
+            persistInspectionContext();
+            onOpenProcurement?.(options);
+          }}
+          onOpenUnitWorkspace={(unitId) => {
+            const currentTarget = focusedScopeRecord
+              ? {
+                  entityType: focusedScopeRecord.entityType,
+                  entityId: focusedScopeRecord.entityId,
+                  originLabel: focusedScopeRecord.originLabel || originContextLabel,
+                }
+              : initialScopeTarget;
+            persistInspectionContext(currentTarget || null);
+            onOpenUnitWorkspace?.(unitId, {
+              preferredTab: currentTarget ? 'scope' : 'inspection',
+              inspectionId: inspection.id,
+              scopeSection: deriveScopeSectionFromTarget(currentTarget),
+              scopeTarget: currentTarget || null,
+              reasonLabel: currentTarget?.originLabel || originContextLabel || 'Inspection priority context',
+              reasonDetail: currentTarget
+                ? `Return to the focused ${currentTarget.entityType === 'material' ? 'material requirement' : currentTarget.entityType} when you reopen inspection.`
+                : 'Return to the current inspection context without losing track of what matters first.',
+            });
+          }}
         />
 
         {/* Reports Section (Feature Flagged) */}

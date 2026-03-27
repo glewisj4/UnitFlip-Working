@@ -52,6 +52,28 @@ export const MATERIAL_REQUIREMENT_STATUSES = [
   'fulfilled',
   'canceled',
 ] as const;
+export const MATERIAL_PROCUREMENT_STATES = [
+  'scoped_only',
+  'ready_for_procurement',
+  'activated',
+  'ordered',
+  'fulfilled',
+] as const;
+export const MATERIAL_VENDOR_ACTION_STATES = [
+  'unassigned',
+  'assigned',
+  'acknowledged',
+  'in_progress',
+  'completed',
+] as const;
+export const MATERIAL_VERIFICATION_STATUSES = ['pending', 'received', 'verified'] as const;
+export const MATERIAL_CLOSEOUT_ISSUE_STATES = [
+  'none',
+  'verification_failed',
+  'partial_receipt',
+  'rework_required',
+] as const;
+export const MATERIAL_CORRECTION_ROUTES = ['vendor', 'procurement', 'scope'] as const;
 export const SCOPE_READINESS_STAGES = [
   'needs_findings',
   'ready_for_tasks',
@@ -68,6 +90,11 @@ export type RepairTaskStatus = (typeof REPAIR_TASK_STATUSES)[number];
 export type MaterialRequirementConfidence = (typeof MATERIAL_REQUIREMENT_CONFIDENCE)[number];
 export type MaterialRequirementSource = (typeof MATERIAL_REQUIREMENT_SOURCES)[number];
 export type MaterialRequirementStatus = (typeof MATERIAL_REQUIREMENT_STATUSES)[number];
+export type MaterialProcurementState = (typeof MATERIAL_PROCUREMENT_STATES)[number];
+export type MaterialVendorActionState = (typeof MATERIAL_VENDOR_ACTION_STATES)[number];
+export type MaterialVerificationStatus = (typeof MATERIAL_VERIFICATION_STATUSES)[number];
+export type MaterialCloseoutIssueState = (typeof MATERIAL_CLOSEOUT_ISSUE_STATES)[number];
+export type MaterialCorrectionRoute = (typeof MATERIAL_CORRECTION_ROUTES)[number];
 export type ScopeReadinessStage = (typeof SCOPE_READINESS_STAGES)[number];
 
 export interface Finding {
@@ -118,12 +145,39 @@ export interface MaterialRequirement {
   confidence: MaterialRequirementConfidence;
   source: MaterialRequirementSource;
   status: MaterialRequirementStatus;
+  procurementState?: MaterialProcurementState;
   notes?: string;
   roomLabel?: string;
   sourceFindingId?: string;
   sourceGeneratedSectionId?: string;
   sourceGeneratedItemId?: string;
   selectedMatch?: SelectedProcurementOption;
+  procurementReadyAt?: number;
+  procurementActivatedAt?: number;
+  procurementActivatedByUserId?: string;
+  assignedVendorUserId?: string;
+  assignedVendorDisplayName?: string;
+  procurementAssignedAt?: number;
+  procurementAssignedByUserId?: string;
+  vendorActionState?: MaterialVendorActionState;
+  vendorActionUpdatedAt?: number;
+  vendorActionUpdatedByUserId?: string;
+  vendorCompletedAt?: number;
+  vendorCompletedByUserId?: string;
+  vendorCompletionNote?: string;
+  vendorCompletionDetails?: string;
+  receivedAt?: number;
+  receivedByUserId?: string;
+  verifiedAt?: number;
+  verifiedByUserId?: string;
+  verificationStatus?: MaterialVerificationStatus;
+  closeoutIssueState?: MaterialCloseoutIssueState;
+  closeoutIssueNotes?: string;
+  closeoutIssueAt?: number;
+  closeoutIssueByUserId?: string;
+  correctionRoute?: MaterialCorrectionRoute;
+  reopenedAt?: number;
+  reopenedByUserId?: string;
   metadata?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;

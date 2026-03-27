@@ -178,7 +178,8 @@ export const createInspectionOperationalSummary = (
       totalQuantity: materials.reduce((sum, material) => sum + material.quantity, 0),
       openCount: materials.filter((material) => !['fulfilled', 'canceled'].includes(material.status)).length,
       procurementReadyCount: materials.filter((material) =>
-        ['reviewed', 'planned', 'quoted', 'ordered'].includes(material.status)
+        ['ready_for_procurement', 'activated', 'ordered', 'fulfilled'].includes(material.procurementState || '')
+          || ['reviewed', 'planned', 'quoted', 'ordered'].includes(material.status)
       ).length,
     },
     scopeReadiness: getScopeReadiness(checklist, findings, tasks, materials),

@@ -1,4 +1,4 @@
-import { CatalogItem, Category, ProductOption, Tier } from '../models/types';
+import { CatalogItem, Tier } from '../models/types';
 import { createLocalDbAdapter } from '../adapters/createLocalDbAdapter';
 import { createId } from '../../services/storage';
 import { normalizeTitle } from '../../utils/normalizeTitle';
@@ -13,111 +13,89 @@ export class CatalogService {
 
   static async getItems(orgId: string): Promise<CatalogItem[]> {
     let items = await adapter.getItem<CatalogItem[]>(this.getStoreKey(orgId));
-    
-    // Migration: If no catalog items found, try to migrate from old products
+
     if (!items || items.length === 0) {
       const oldData = await adapter.getItem<any>('unitflip_db_v2');
       if (oldData && oldData.products) {
-        items = oldData.products.map((p: any) => ({
-          id: p.id,
-          orgId,
-          title: p.name,
-          normalizedTitle: normalizeTitle(p.name),
-          categoryId: undefined,
-          categoryName: p.category,
-          description: p.description,
-          tags: [],
-          defaultQty: p.quantity || 1,
-          unit: p.unit || 'ea',
-          defaultTier: p.options?.[0]?.tier || Tier.STANDARD,
-          options: p.options || [],
-          isActive: true,
-          createdAt: new Date(p.createdAt || Date.now()).toISOString(),
-          updatedAt: new Date().toISOString(),
-        }));
+        items = oldData.products.map((product: any) =>
+          this.normalizeItem({
+            id: product.id,
+            orgId,
+            title: product.name || 'Untitled',
+            name: product.name || 'Untitled',
+            normalizedTitle: normalizeTitle(product.name || 'Untitled'),
+            categoryId: undefined,
+            categoryName: product.category,
+            topLevelCategory: product.category,
+            description: product.description,
+            tags: [],
+            functionalTags: [],
+            defaultQty: product.quantity || 1,
+            unit: product.unit || 'ea',
+            defaultTier: product.options?.[0]?.tier || Tier.STANDARD,
+            options: product.options || [],
+            defaultPrice: product.defaultPrice,
+            isActive: true,
+            importSource: 'manual',
+            createdAt: product.createdAt || Date.now(),
+            updatedAt: Date.now(),
+          }),
+        );
         await this.saveItems(orgId, items);
       }
     }
-    
-    // Ensure all items have new fields populated
-    if (items) {
-      return items.map(i => ({
-        ...i,
-        title: i.title || i.name || 'Untitled',
-        normalizedTitle: i.normalizedTitle || normalizeTitle(i.title || i.name || ''),
-        isActive: i.isActive ?? true,
-        createdAt: typeof i.createdAt === 'number' ? new Date(i.createdAt).toISOString() : i.createdAt,
-        updatedAt: typeof i.updatedAt === 'number' ? new Date(i.updatedAt).toISOString() : i.updatedAt,
-      }));
-    }
 
-    return items || [];
+    return (items || []).map((item) => this.normalizeItem(item));
   }
 
   static async getItem(orgId: string, itemId: string): Promise<CatalogItem | undefined> {
     const items = await this.getItems(orgId);
-    return items.find(i => i.id === itemId);
+    return items.find((item) => item.id === itemId);
   }
 
   static async saveItems(orgId: string, items: CatalogItem[]): Promise<void> {
-    await adapter.setItem(this.getStoreKey(orgId), items);
+    await adapter.setItem(this.getStoreKey(orgId), items.map((item) => this.normalizeItem(item)));
   }
 
   static async addItem(orgId: string, item: Partial<CatalogItem>): Promise<CatalogItem> {
     const items = await this.getItems(orgId);
-    
-    // Validate
-    if (!item.title) throw new Error('Title is required');
+    const title = (item.title || item.name || '').trim();
+    if (!title) throw new Error('Title is required');
     if (item.defaultPrice !== undefined && item.defaultPrice < 0) throw new Error('Price must be >= 0');
 
-    // Check uniqueness of itemNumber if provided
     if (item.itemNumber) {
-      const duplicate = items.find(i => i.itemNumber === item.itemNumber);
+      const duplicate = items.find((entry) => entry.itemNumber === item.itemNumber);
       if (duplicate) {
         throw new Error(`Item number "${item.itemNumber}" already exists.`);
       }
     }
 
-    const newItem: CatalogItem = {
+    const newItem = this.normalizeItem({
+      ...item,
       id: createId(),
       orgId,
-      title: item.title,
-      normalizedTitle: normalizeTitle(item.title),
-      itemNumber: item.itemNumber,
-      modelNumber: item.modelNumber,
-      brand: item.brand,
-      categoryId: item.categoryId,
-      categoryName: item.categoryName,
-      defaultPrice: item.defaultPrice,
-      priceSource: item.priceSource,
-      imageUrl: item.imageUrl,
-      description: item.description,
+      title,
+      name: title,
+      normalizedTitle: normalizeTitle(title),
       tags: item.tags || [],
-      isActive: item.isActive ?? true,
-      source: item.source,
-      sourceRef: item.sourceRef,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      createdBy: item.createdBy,
-      updatedBy: item.updatedBy,
-      lastVerifiedAt: item.lastVerifiedAt,
-      notes: item.notes,
-      // Legacy fields
-      name: item.title,
+      functionalTags: item.functionalTags || [],
       defaultQty: item.defaultQty || 1,
       unit: item.unit || 'ea',
       defaultTier: item.defaultTier || Tier.STANDARD,
       options: item.options || [],
-    };
+      isActive: item.isActive ?? true,
+      importSource: item.importSource || 'manual',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as CatalogItem);
 
     items.push(newItem);
     await this.saveItems(orgId, items);
 
-    // Audit Log
     await AuditLogService.logEvent({
       orgId,
       userId: item.createdBy || 'system',
-      userRole: 'manager', // Default
+      userRole: 'manager',
       type: 'CATALOG_ITEM_CREATED',
       entityId: newItem.id,
       message: `Created catalog item: ${newItem.title}`,
@@ -128,36 +106,31 @@ export class CatalogService {
 
   static async updateItem(orgId: string, itemId: string, updates: Partial<CatalogItem>): Promise<CatalogItem> {
     const items = await this.getItems(orgId);
-    const index = items.findIndex(i => i.id === itemId);
+    const index = items.findIndex((item) => item.id === itemId);
     if (index === -1) throw new Error('Item not found');
 
-    // Validate
     if (updates.title === '') throw new Error('Title cannot be empty');
     if (updates.defaultPrice !== undefined && updates.defaultPrice < 0) throw new Error('Price must be >= 0');
-
-    // Check uniqueness of itemNumber if provided and changed
     if (updates.itemNumber && updates.itemNumber !== items[index].itemNumber) {
-      const duplicate = items.find(i => i.itemNumber === updates.itemNumber && i.id !== itemId);
+      const duplicate = items.find((entry) => entry.itemNumber === updates.itemNumber && entry.id !== itemId);
       if (duplicate) {
         throw new Error(`Item number "${updates.itemNumber}" already exists.`);
       }
     }
 
-    const updatedItem = {
+    const nextTitle = (updates.title || updates.name || items[index].title || items[index].name || '').trim();
+    const updatedItem = this.normalizeItem({
       ...items[index],
       ...updates,
+      title: nextTitle,
+      name: nextTitle,
+      normalizedTitle: normalizeTitle(nextTitle),
       updatedAt: new Date().toISOString(),
-    };
-    
-    if (updates.title) {
-      updatedItem.normalizedTitle = normalizeTitle(updates.title);
-      updatedItem.name = updates.title; // Sync legacy field
-    }
+    } as CatalogItem);
 
     items[index] = updatedItem;
     await this.saveItems(orgId, items);
 
-    // Audit Log
     await AuditLogService.logEvent({
       orgId,
       userId: updates.updatedBy || 'system',
@@ -172,16 +145,17 @@ export class CatalogService {
 
   static async deleteItem(orgId: string, itemId: string): Promise<void> {
     const items = await this.getItems(orgId);
-    const item = items.find(i => i.id === itemId);
+    const item = items.find((entry) => entry.id === itemId);
     if (!item) return;
 
-    const filtered = items.filter(i => i.id !== itemId);
-    await this.saveItems(orgId, filtered);
+    await this.saveItems(
+      orgId,
+      items.filter((entry) => entry.id !== itemId),
+    );
 
-    // Audit Log
     await AuditLogService.logEvent({
       orgId,
-      userId: 'system', // We don't have userId here easily without passing it
+      userId: 'system',
       userRole: 'manager',
       type: 'CATALOG_ITEM_DELETED',
       entityId: itemId,
@@ -191,22 +165,24 @@ export class CatalogService {
 
   static async duplicateItem(orgId: string, itemId: string): Promise<CatalogItem> {
     const items = await this.getItems(orgId);
-    const item = items.find(i => i.id === itemId);
+    const item = items.find((entry) => entry.id === itemId);
     if (!item) throw new Error('Item not found');
 
-    const newItem: CatalogItem = {
+    const title = `${item.title} (Copy)`;
+    const newItem = this.normalizeItem({
       ...item,
       id: createId(),
-      title: `${item.title} (Copy)`,
-      normalizedTitle: normalizeTitle(`${item.title} (Copy)`),
-      itemNumber: undefined, // Clear unique fields
+      title,
+      name: title,
+      normalizedTitle: normalizeTitle(title),
+      itemNumber: undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    };
+    });
+
     items.push(newItem);
     await this.saveItems(orgId, items);
 
-    // Audit Log
     await AuditLogService.logEvent({
       orgId,
       userId: 'system',
@@ -217,5 +193,34 @@ export class CatalogService {
     });
 
     return newItem;
+  }
+
+  private static normalizeItem(item: CatalogItem): CatalogItem {
+    const title = (item.title || item.name || 'Untitled').trim() || 'Untitled';
+    const createdAt =
+      typeof item.createdAt === 'number' ? new Date(item.createdAt).toISOString() : item.createdAt || new Date().toISOString();
+    const updatedAt =
+      typeof item.updatedAt === 'number' ? new Date(item.updatedAt).toISOString() : item.updatedAt || new Date().toISOString();
+
+    return {
+      ...item,
+      title,
+      name: item.name || title,
+      normalizedTitle: item.normalizedTitle || normalizeTitle(title),
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      functionalTags: Array.isArray(item.functionalTags) ? item.functionalTags : [],
+      topLevelCategory: item.topLevelCategory || item.categoryName || item.category,
+      subcategory: item.subcategory || undefined,
+      equivalentGroup: item.equivalentGroup || undefined,
+      vendor: item.vendor || item.options?.[0]?.brand || item.brand || undefined,
+      importSource: item.importSource || 'manual',
+      options: Array.isArray(item.options) ? item.options : [],
+      defaultQty: item.defaultQty || 1,
+      unit: item.unit || 'ea',
+      defaultTier: item.defaultTier || item.options?.[0]?.tier || Tier.STANDARD,
+      isActive: item.isActive ?? true,
+      createdAt,
+      updatedAt,
+    };
   }
 }
