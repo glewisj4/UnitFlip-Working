@@ -48,7 +48,7 @@ const signInDeveloperAndSeed = async (page, consoleMessages) => {
   await page.reload();
 
   await signInFromLanding(page, 'Developer Demo');
-  await expect(page.getByRole('heading', { name: 'Start or continue inspection work.' })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('focused-home-screen')).toBeVisible({ timeout: 20000 });
 
   await page.locator('header').getByRole('button', { name: 'Seed Demo Data', exact: true }).click();
   await page.waitForFunction(
@@ -79,6 +79,14 @@ const openUnitWorkspaceForUnit = async (page, unitLabel) => {
   await page.getByRole('button', { name: new RegExp(unitLabel, 'i') }).first().click();
 };
 
+const dismissFeedbackIfOpen = async (page) => {
+  const feedbackHeading = page.getByRole('heading', { name: 'Send Feedback' });
+  if (await feedbackHeading.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await page.getByRole('button', { name: 'Feedback' }).click();
+    await expect(feedbackHeading).toHaveCount(0);
+  }
+};
+
 test('authentication, session, and navigation audit', async ({ page }) => {
   test.setTimeout(240000);
   const consoleMessages = [];
@@ -96,8 +104,9 @@ test('authentication, session, and navigation audit', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Seed Demo Data', exact: true })).toBeVisible();
   await page.reload();
   await expect(page.locator('header').getByText('Devon Developer', { exact: true })).toBeVisible({ timeout: 20000 });
-  await expect(page.getByRole('heading', { name: 'Start or continue inspection work.' })).toBeVisible();
+  await expect(page.getByTestId('focused-home-screen')).toBeVisible();
 
+  await page.locator('header').getByRole('button', { name: 'Full Mode', exact: true }).click();
   await page.getByRole('button', { name: 'Dashboard', exact: true }).first().click();
   await expect(page.getByRole('heading', { name: /See what needs attention now and route directly into the work/i })).toBeVisible({ timeout: 20000 });
   await expect(page.getByRole('button', { name: 'Portfolio', exact: true })).toBeVisible();
@@ -149,6 +158,43 @@ test('end-to-end workflow audit across portfolio, unit workspace, inspection, pr
   });
 
   await signInDeveloperAndSeed(page, consoleMessages);
+  await dismissFeedbackIfOpen(page);
+
+  await expect(page.getByTestId('focused-home-start-inspection')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-home-start-inspection').click();
+  await expect(page.getByTestId('focused-unit-select-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByLabel('Unit name').fill('Unit 101');
+  await page.getByLabel('Unit code').fill('FOCUS-DUPE');
+  await page.getByLabel('Address').fill('1200 Harbor View Dr');
+  await page.getByTestId('focused-layout-template-select').selectOption({ label: '2 Bed / 1 Bath' });
+  await page.getByTestId('focused-create-unit').click();
+  await expect(page.getByTestId('focused-duplicate-modal')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-duplicate-modal').getByRole('button', { name: 'Continue New' }).click();
+  await expect(page.getByTestId('focused-inspection-screen')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByRole('button', { name: 'Bedroom 2' })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByRole('button', { name: 'Bathroom' })).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-inspection-screen').getByRole('button', { name: 'Repair' }).first().click();
+  await page.getByTestId('focused-inspection-screen').locator('select').first().selectOption({ index: 1 });
+  await page.getByRole('button', { name: /Add to Materials|Update Materials/ }).first().click();
+  await expect(page.getByText(/Materials list now includes/i).first()).toBeVisible({ timeout: 20000 });
+  await page.getByRole('button', { name: 'Review Summary' }).click();
+  await expect(page.getByTestId('focused-summary-screen')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText(/Room summaries/i)).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText(/Missing or incomplete/i)).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-summary-screen').getByRole('button', { name: 'View Materials' }).click();
+  await expect(page.getByTestId('focused-materials-screen')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText(/Total estimated cost:/i)).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-materials-screen').getByRole('button', { name: 'Submit to Procurement' }).click({ force: true });
+  await expect(page.getByTestId('focused-submission-status')).toContainText(/Submitted successfully/i);
+  await expect(page.getByTestId('focused-submission-status')).toContainText(/Materials are now in Procurement/i);
+  await page.getByTestId('focused-post-submit-procurement').click();
+  await expect(page.getByRole('heading', { name: 'Procurement Workspace' })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('procurement-focused-arrival')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('procurement-focused-arrival')).toContainText(/Focused submission arrived in Procurement/i);
+  await page.locator('header').getByRole('button', { name: /Focused/i }).click();
+  await expect(page.getByTestId('focused-materials-screen')).toBeVisible({ timeout: 20000 });
+  await page.locator('header').getByRole('button', { name: /Full/i }).click();
+  await expect(page.getByRole('button', { name: 'Dashboard', exact: true }).first()).toBeVisible({ timeout: 20000 });
 
   await page.getByRole('button', { name: 'Dashboard', exact: true }).first().click();
   await expect(page.getByRole('heading', { name: /See what needs attention now and route directly into the work/i })).toBeVisible({ timeout: 20000 });
@@ -193,15 +239,15 @@ test('end-to-end workflow audit across portfolio, unit workspace, inspection, pr
   await expect(page.getByTestId('procurement-mode-exceptions')).toBeVisible();
 
   await page.getByRole('button', { name: 'Inspection', exact: true }).first().click();
-  await expect(page.getByRole('heading', { name: 'Start or continue inspection work.' })).toBeVisible({ timeout: 20000 });
-  await page.getByRole('button', { name: 'Show all 54 units' }).click();
-  await page.getByRole('button', { name: /Unit 101/i }).first().click();
-  await expect(page.getByRole('heading', { name: 'Inspection queue' })).toBeVisible({ timeout: 20000 });
-  await page.getByRole('button', { name: 'New Inspection' }).click();
-  await expect(page.getByRole('heading', { name: 'New Inspection' })).toBeVisible({ timeout: 20000 });
-  await page.getByPlaceholder('Move-out Check').fill('Workflow Audit Inspection');
-  await page.getByRole('button', { name: 'Create Without Template' }).click({ force: true });
-  await expect(page.getByRole('heading', { name: 'Edit Inspection' })).toBeVisible({ timeout: 20000 });
+  const editInspectionHeading = page.getByRole('heading', { name: 'Edit Inspection' });
+  const inspectionHomeHeading = page.getByRole('heading', { name: 'Start or continue inspection work.' });
+  if (await editInspectionHeading.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await expect(editInspectionHeading).toBeVisible({ timeout: 20000 });
+  } else {
+    await expect(inspectionHomeHeading).toBeVisible({ timeout: 20000 });
+    await page.getByRole('button', { name: /Focused Inspection/i }).first().click();
+    await expect(editInspectionHeading).toBeVisible({ timeout: 20000 });
+  }
   await expect(page.getByText(/Inspection Intelligence/i)).toBeVisible();
   await expect(page.getByText(/Guided Scope Progression/i)).toBeVisible();
   await expect(page.getByText(/Continue inspection capture|Add findings/i).first()).toBeVisible();
@@ -289,6 +335,107 @@ test('end-to-end workflow audit across portfolio, unit workspace, inspection, pr
   await expect(page.getByRole('heading', { name: 'Procurement Workspace' })).toBeVisible({ timeout: 20000 });
 });
 
+test('focused post-submit decision guidance audit', async ({ page }) => {
+  test.setTimeout(240000);
+  const consoleMessages = [];
+
+  page.on('dialog', async (dialog) => {
+    await dialog.accept();
+  });
+  page.on('console', (message) => {
+    consoleMessages.push(message.text());
+  });
+
+  await signInDeveloperAndSeed(page, consoleMessages);
+  await dismissFeedbackIfOpen(page);
+
+  await expect(page.getByTestId('focused-home-start-inspection')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-home-start-inspection').click();
+  await expect(page.getByTestId('focused-unit-select-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByLabel('Unit name').fill('Unit 101');
+  await page.getByLabel('Unit code').fill('FOCUS-POST-1');
+  await page.getByLabel('Address').fill('1200 Harbor View Dr');
+  await page.getByTestId('focused-layout-template-select').selectOption({ label: '2 Bed / 1 Bath' });
+  await page.getByTestId('focused-create-unit').click();
+  await expect(page.getByTestId('focused-duplicate-modal')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-duplicate-modal').getByRole('button', { name: 'Continue New' }).click();
+  await expect(page.getByTestId('focused-inspection-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-inspection-screen').getByRole('button', { name: 'Repair' }).first().click();
+  await page.getByTestId('focused-inspection-screen').locator('select').first().selectOption({ index: 1 });
+  await page.getByRole('button', { name: /Add to Materials|Update Materials/ }).first().click();
+  await expect(page.getByText(/Materials list now includes/i).first()).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText(/Saved locally and ready to continue|Saved on this device|Saved locally/i).last()).toBeVisible({ timeout: 20000 });
+  await page.getByRole('button', { name: 'Review Summary' }).click({ force: true });
+  await expect(page.getByTestId('focused-summary-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-summary-screen').getByRole('button', { name: 'View Materials' }).click({ force: true });
+  await expect(page.getByTestId('focused-materials-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-materials-screen').getByRole('button', { name: 'Submit to Procurement' }).click({ force: true });
+  await expect(page.getByTestId('focused-submission-status')).toContainText(/Submitted successfully/i);
+  await expect(page.getByTestId('focused-submission-status')).toContainText(/You are done here unless you want to act in Procurement immediately or start the next unit/i);
+  await expect(page.getByTestId('focused-post-submit-start-another')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('focused-post-submit-unit-list')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-post-submit-start-another').click();
+  await expect(page.getByTestId('focused-unit-select-screen')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByLabel('Unit name')).toHaveValue('');
+  await dismissFeedbackIfOpen(page);
+
+  await page.getByLabel('Unit name').fill('Unit 101');
+  await page.getByLabel('Unit code').fill('FOCUS-POST-2');
+  await page.getByLabel('Address').fill('1200 Harbor View Dr');
+  await page.getByTestId('focused-layout-template-select').selectOption({ label: '2 Bed / 1 Bath' });
+  await page.getByTestId('focused-create-unit').click();
+  await expect(page.getByTestId('focused-duplicate-modal')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-duplicate-modal').getByRole('button', { name: 'Continue New' }).click();
+  await expect(page.getByTestId('focused-inspection-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-inspection-screen').getByRole('button', { name: 'Repair' }).first().click();
+  await page.getByTestId('focused-inspection-screen').locator('select').first().selectOption({ index: 1 });
+  await page.getByRole('button', { name: /Add to Materials|Update Materials/ }).first().click();
+  await expect(page.getByText(/Materials list now includes/i).first()).toBeVisible({ timeout: 20000 });
+  await page.getByRole('button', { name: 'Review Summary' }).click({ force: true });
+  await expect(page.getByTestId('focused-summary-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-summary-screen').getByRole('button', { name: 'View Materials' }).click({ force: true });
+  await expect(page.getByTestId('focused-materials-screen')).toBeVisible({ timeout: 20000 });
+  await page.context().setOffline(true);
+  await page.getByTestId('focused-materials-screen').getByRole('button', { name: 'Submit to Procurement' }).click({ force: true });
+  await expect(page.getByTestId('focused-submission-status')).toContainText(/Queued offline/i);
+  await expect(page.getByTestId('focused-submission-status')).toContainText(/Nothing was lost|on this device/i);
+  await page.context().setOffline(false);
+  await page.locator('header').getByRole('button', { name: 'Full Mode', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Dashboard', exact: true }).first()).toBeVisible({ timeout: 20000 });
+  await page.locator('header').getByRole('button', { name: /Focused/i }).click();
+  await expect(page.getByTestId('focused-materials-screen')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('focused-submission-status')).toContainText(/Queued offline/i);
+  await expect(page.getByTestId('focused-post-submit-retry-queued')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-post-submit-retry-queued').click();
+  await expect(page.getByTestId('focused-submission-status')).toContainText(/Submitted successfully/i);
+  await page.getByTestId('focused-post-submit-unit-list').click();
+  await expect(page.getByTestId('focused-unit-select-screen')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByLabel('Unit name')).toHaveValue('');
+
+  await page.getByLabel('Unit name').fill('Unit 101');
+  await page.getByLabel('Unit code').fill('FOCUS-POST-3');
+  await page.getByLabel('Address').fill('1200 Harbor View Dr');
+  await page.getByTestId('focused-layout-template-select').selectOption({ label: '2 Bed / 1 Bath' });
+  await page.getByTestId('focused-create-unit').click();
+  await expect(page.getByTestId('focused-duplicate-modal')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-duplicate-modal').getByRole('button', { name: 'Continue New' }).click();
+  await expect(page.getByTestId('focused-inspection-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-inspection-screen').getByRole('button', { name: 'Repair' }).first().click();
+  await page.getByTestId('focused-inspection-screen').locator('select').first().selectOption({ index: 1 });
+  await page.getByRole('button', { name: /Add to Materials|Update Materials/ }).first().click();
+  await expect(page.getByText(/Materials list now includes/i).first()).toBeVisible({ timeout: 20000 });
+  await page.getByRole('button', { name: 'Review Summary' }).click({ force: true });
+  await expect(page.getByTestId('focused-summary-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-summary-screen').getByRole('button', { name: 'View Materials' }).click({ force: true });
+  await expect(page.getByTestId('focused-materials-screen')).toBeVisible({ timeout: 20000 });
+  await page.evaluate(() => {
+    (window).__unitflipTestFlags = { forceFocusedSubmitFailureOnce: true };
+  });
+  await page.getByTestId('focused-materials-screen').getByRole('button', { name: 'Submit to Procurement' }).click({ force: true });
+  await expect(page.getByTestId('focused-submission-status')).toContainText(/Retry needed/i);
+  await expect(page.getByTestId('focused-post-submit-retry')).toBeVisible({ timeout: 20000 });
+});
+
 test('exception and correction-route audit', async ({ page }) => {
   test.setTimeout(240000);
   const consoleMessages = [];
@@ -301,8 +448,35 @@ test('exception and correction-route audit', async ({ page }) => {
   });
 
   await signInDeveloperAndSeed(page, consoleMessages);
-
+  await page.locator('header').getByRole('button', { name: 'Full Mode', exact: true }).click();
   await page.getByRole('button', { name: 'Portfolio', exact: true }).first().click();
+  await expect(page.getByRole('heading', { name: /Browse units and decide where work should happen next/i })).toBeVisible({ timeout: 20000 });
+  await page.getByPlaceholder(/Search facilities, buildings, units/i).fill('LC-A-101');
+  await page.getByRole('button', { name: /Unit 101/i }).first().click();
+  await expect(page.getByTestId('portfolio-template-status')).toContainText(/Template ready/i);
+  await page.getByRole('button', { name: 'Manage Record' }).click();
+  await expect(page.getByText(/Unit record management/i)).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('unit-record-template-select').selectOption('');
+  await page.getByRole('button', { name: 'Save Unit Details' }).click();
+  await page.getByRole('button', { name: 'Back to Portfolio' }).click();
+  await expect(page.getByTestId('portfolio-template-status')).toContainText(/Suggested template/i);
+  await expect(page.getByTestId('portfolio-apply-suggested-template')).toBeVisible({ timeout: 20000 });
+  await page.locator('header').getByRole('button', { name: /Focused/i }).click();
+  await page.getByTestId('focused-home-start-inspection').click();
+  await expect(page.getByTestId('focused-unit-select-screen')).toBeVisible({ timeout: 20000 });
+  await page.getByTestId('focused-unit-search').fill('LC-A-101');
+  await page.getByTestId(/focused-unit-action-/).first().click();
+  await expect(page.getByTestId('focused-inspection-screen')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByRole('button', { name: 'Living Room' })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByRole('button', { name: 'Kitchen' })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByRole('button', { name: 'Bedroom 1' })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByRole('button', { name: 'Bathroom' })).toBeVisible({ timeout: 20000 });
+  await page.locator('header').getByRole('button', { name: 'Full Mode', exact: true }).click();
+  await page.getByRole('button', { name: 'Portfolio', exact: true }).first().click();
+  await page.getByPlaceholder(/Search facilities, buildings, units/i).fill('LC-A-101');
+  await page.getByRole('button', { name: /Unit 101/i }).first().click();
+  await expect(page.getByTestId('portfolio-template-status')).toContainText(/Template ready/i);
+
   await expect(page.getByRole('heading', { name: /Browse units and decide where work should happen next/i })).toBeVisible({ timeout: 20000 });
   await page.getByPlaceholder(/Search facilities, buildings, units/i).fill('Unit 106');
   await page.getByRole('button', { name: /Unit 106/i }).first().click();

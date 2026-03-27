@@ -463,7 +463,13 @@ export const UnitRecordPanel: React.FC<UnitRecordPanelProps> = ({
 
           <Section title="Template assignment" icon={<Layers3 size={16} className="text-slate-600" />}>
             <div className="grid gap-3 lg:grid-cols-2">
-              <select className={inputClass} value={draft.assignedLayoutTemplateId || ''} onChange={(event) => updateDraft({ assignedLayoutTemplateId: event.target.value || null })}>
+              <select
+                data-testid="unit-record-template-select"
+                aria-label="Assigned layout template"
+                className={inputClass}
+                value={draft.assignedLayoutTemplateId || ''}
+                onChange={(event) => updateDraft({ assignedLayoutTemplateId: event.target.value || null })}
+              >
                 <option value="">No unit-specific assignment</option>
                 {layouts.map((layout) => (
                   <option key={layout.id} value={layout.id}>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
@@ -17,6 +17,8 @@ import { InspectionHome } from './components/InspectionHome';
 import { UnitManagement } from './components/UnitManagement';
 import { UnitWorkspace } from './components/UnitWorkspace';
 import { LocalSignInScreen } from './components/LocalSignInScreen';
+import { FocusedHome } from './components/FocusedHome';
+import { FocusedInspectionWorkflow } from './components/FocusedInspectionWorkflow';
 import { ClientCrashCapture, ErrorBoundary } from './components/ErrorBoundary';
 import { FeedbackManagement } from './pages/FeedbackManagement';
 
@@ -38,6 +40,8 @@ type InspectionScopeTarget = {
   originLabel?: string | null;
 };
 type ProcurementFocus = 'all' | 'procurement' | 'vendor' | 'receiving' | 'verification';
+type AppMode = 'focused' | 'full';
+type FocusedRoute = 'home' | 'unit-select' | 'inspection' | 'summary' | 'materials';
 type WorkspaceAttentionContext = {
   unitId: string;
   preferredTab?: LifecycleTab | null;
@@ -49,6 +53,23 @@ type WorkspaceAttentionContext = {
   token: number;
 };
 type RecentWorkSurface = 'inspection' | 'unit_workspace' | 'procurement';
+type FocusedProcurementArrivalContext = {
+  source: 'focused_submission';
+  outcome: 'submitted' | 'queued';
+  unitName: string;
+  itemCount: number;
+  estimatedTotal: number;
+  nextStep: string;
+};
+type FocusedWorkflowSubmissionState = {
+  outcome: 'submitted' | 'queued' | 'failed';
+  unitName: string;
+  itemCount: number;
+  estimatedTotal: number;
+  requirementIds: string[];
+  nextStep: string;
+  detail: string;
+};
 type RecentWorkEntry = {
   id: string;
   surface: RecentWorkSurface;
@@ -63,8 +84,21 @@ type RecentWorkEntry = {
   requirementId?: string | null;
   originLabel?: string | null;
 };
+type FocusedWorkflowSession = {
+  intent: 'inspection' | 'materials';
+  step: FocusedRoute | 'select';
+  unitId?: string | null;
+  inspectionId?: string | null;
+  roomId?: string | null;
+  itemId?: string | null;
+  scopeSection?: InspectionScopeSection | null;
+  scopeTarget?: InspectionScopeTarget | null;
+  procurementRequirementId?: string | null;
+  submissionState?: FocusedWorkflowSubmissionState | null;
+} | null;
 
 const RECENT_WORK_LIMIT = 5;
+const APP_MODE_STORAGE_KEY = 'unitflip:app-mode:v1';
 const getShareTokenFromLocation = (): string | null => {
   const pathname = window.location.pathname || '';
   if (!pathname.startsWith('/share/')) return null;
@@ -93,6 +127,17 @@ const buildRecentWorkId = (entry: Omit<RecentWorkEntry, 'id'>) =>
   ].join('::');
 
 const buildRecentWorkStorageKey = (role?: string | null) => `unitflip:recent-work:${role || 'anonymous'}`;
+const buildFocusedWorkflowStorageKey = (role?: string | null) => `unitflip:focused-workflow:${role || 'anonymous'}`;
+const readFocusedWorkflowSession = (role?: string | null): FocusedWorkflowSession => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(buildFocusedWorkflowStorageKey(role));
+    if (!raw) return null;
+    return JSON.parse(raw) as FocusedWorkflowSession;
+  } catch {
+    return null;
+  }
+};
 
 const readRecentWork = (role?: string | null): RecentWorkEntry[] => {
   if (typeof window === 'undefined') return [];
@@ -119,6 +164,11 @@ const AppContent: React.FC = () => {
 
   const [isAppDataLoaded, setIsAppDataLoaded] = useState(false);
   const [currentView, setCurrentView] = useState('inspections');
+  const [appMode, setAppMode] = useState<AppMode>(() => {
+    if (typeof window === 'undefined') return 'focused';
+    const stored = window.localStorage.getItem(APP_MODE_STORAGE_KEY);
+    return stored === 'full' ? 'full' : 'focused';
+  });
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [selectedWorkspaceUnitId, setSelectedWorkspaceUnitId] = useState<string | null>(null);
   const [selectedWorkspaceAttentionContext, setSelectedWorkspaceAttentionContext] = useState<WorkspaceAttentionContext | null>(null);
@@ -133,7 +183,12 @@ const AppContent: React.FC = () => {
   const [focusedProcurementUnitId, setFocusedProcurementUnitId] = useState<string | null>(null);
   const [focusedProcurementStage, setFocusedProcurementStage] = useState<ProcurementFocus>('all');
   const [focusedProcurementRequirementId, setFocusedProcurementRequirementId] = useState<string | null>(null);
+  const [focusedProcurementRequirementIds, setFocusedProcurementRequirementIds] = useState<string[]>([]);
   const [focusedProcurementOriginLabel, setFocusedProcurementOriginLabel] = useState<string | null>(null);
+  const [focusedProcurementArrivalContext, setFocusedProcurementArrivalContext] = useState<FocusedProcurementArrivalContext | null>(null);
+  const [focusedRoute, setFocusedRoute] = useState<FocusedRoute>('home');
+  const [focusedWorkflowSession, setFocusedWorkflowSession] = useState<FocusedWorkflowSession>(null);
+  const focusedWorkflowSessionRef = useRef<FocusedWorkflowSession>(null);
 
   // Share Viewer State
   const [shareToken, setShareToken] = useState<string | null>(null);
@@ -154,6 +209,17 @@ const AppContent: React.FC = () => {
   }, [role]);
 
   useEffect(() => {
+    const nextFocusedSession = readFocusedWorkflowSession(role);
+    focusedWorkflowSessionRef.current = nextFocusedSession;
+    setFocusedWorkflowSession(nextFocusedSession);
+  }, [role]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(APP_MODE_STORAGE_KEY, appMode);
+  }, [appMode]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
       window.sessionStorage.setItem(buildRecentWorkStorageKey(role), JSON.stringify(recentWork.slice(0, RECENT_WORK_LIMIT)));
@@ -161,6 +227,19 @@ const AppContent: React.FC = () => {
       // Ignore session-scoped UI persistence failures.
     }
   }, [recentWork, role]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (focusedWorkflowSession) {
+        window.sessionStorage.setItem(buildFocusedWorkflowStorageKey(role), JSON.stringify(focusedWorkflowSession));
+      } else {
+        window.sessionStorage.removeItem(buildFocusedWorkflowStorageKey(role));
+      }
+    } catch {
+      // Ignore session-scoped UI persistence failures.
+    }
+  }, [focusedWorkflowSession, role]);
 
   const pushRecentWork = (entry: Omit<RecentWorkEntry, 'id'> | null) => {
     if (!entry || !entry.unitId) return;
@@ -254,7 +333,9 @@ const AppContent: React.FC = () => {
       unitId?: string | null;
       focus?: ProcurementFocus;
       requirementId?: string | null;
+      requirementIds?: string[] | null;
       originLabel?: string | null;
+      arrivalContext?: FocusedProcurementArrivalContext | null;
       recentLabel?: string | null;
       recentDetail?: string | null;
     }
@@ -262,7 +343,9 @@ const AppContent: React.FC = () => {
     setFocusedProcurementUnitId(options?.unitId || null);
     setFocusedProcurementStage(options?.focus || 'all');
     setFocusedProcurementRequirementId(options?.requirementId || null);
+    setFocusedProcurementRequirementIds(options?.requirementIds?.filter(Boolean) || []);
     setFocusedProcurementOriginLabel(options?.originLabel || null);
+    setFocusedProcurementArrivalContext(options?.arrivalContext || null);
     setCurrentView('procurement');
     if (!options?.unitId || (options.focus || 'all') === 'all' && !options.requirementId && !options.originLabel) return;
     pushRecentWork({
@@ -335,6 +418,139 @@ const AppContent: React.FC = () => {
         reasonDetail: entry.detail || null,
       },
       entry.label
+    );
+  };
+
+  const handleModeChange = (nextMode: AppMode) => {
+    const activeFocusedSession = focusedWorkflowSessionRef.current || focusedWorkflowSession;
+    const activeFocusedStep = activeFocusedSession?.step || focusedRoute;
+    setAppMode(nextMode);
+    if (nextMode === 'focused') {
+      if (activeFocusedSession?.inspectionId || activeFocusedSession?.unitId) {
+        setFocusedRoute(
+          activeFocusedSession.step === 'select'
+            ? 'inspection'
+            : activeFocusedSession.step === 'home'
+              ? 'home'
+              : activeFocusedSession.step
+        );
+        return;
+      }
+      if (currentView === 'procurement') {
+        setFocusedRoute('materials');
+        return;
+      }
+      if (selectedInspectionId || currentView === 'inspections') {
+        setFocusedRoute('inspection');
+        return;
+      }
+      setFocusedRoute('home');
+      return;
+    }
+
+    if (activeFocusedStep === 'materials') {
+      openProcurement({
+        unitId: activeFocusedSession?.unitId || selectedWorkspaceUnitId || selectedUnitId || focusedProcurementUnitId,
+        focus: 'procurement',
+        requirementId: activeFocusedSession?.procurementRequirementId || null,
+        requirementIds: activeFocusedSession?.procurementRequirementId ? [activeFocusedSession.procurementRequirementId] : [],
+        originLabel: 'Opened from Focused Mode • Materials review',
+      });
+      return;
+    }
+    if (activeFocusedStep === 'inspection' || activeFocusedStep === 'summary') {
+      if (activeFocusedSession?.inspectionId || activeFocusedSession?.unitId) {
+        openInspection({
+          unitId: activeFocusedSession?.unitId || null,
+          inspectionId: activeFocusedSession?.inspectionId || null,
+          scopeSection: activeFocusedSession?.scopeSection || null,
+          scopeTarget: activeFocusedSession?.scopeTarget || null,
+          originContextLabel:
+            activeFocusedStep === 'summary'
+              ? 'Opened from Focused Mode • Inspection summary'
+              : 'Opened from Focused Mode • Active inspection',
+        });
+        return;
+      }
+      setCurrentView('inspections');
+      return;
+    }
+  };
+
+  const renderFocusedContent = () => {
+    if (focusedRoute === 'home') {
+      return (
+        <FocusedHome
+          canStartInspection={AuthPolicyService.canAccessView(permissions, 'inspections')}
+          canProcessMaterials={AuthPolicyService.canAccessView(permissions, 'procurement')}
+          onStartInspection={() => {
+            if (!AuthPolicyService.canAccessView(permissions, 'inspections')) return;
+            setFocusedRoute('inspection');
+          }}
+          onProcessMaterials={() => {
+            if (!AuthPolicyService.canAccessView(permissions, 'procurement')) return;
+            if (role === 'vendor') {
+              setAppMode('full');
+              openProcurement({ focus: 'vendor' });
+              return;
+            }
+            setFocusedRoute('materials');
+          }}
+        />
+      );
+    }
+
+    return (
+      <FocusedInspectionWorkflow
+        intent={focusedRoute === 'materials' ? 'materials' : 'inspection'}
+        initialUnitId={focusedWorkflowSession?.unitId || selectedWorkspaceUnitId || selectedUnitId || focusedProcurementUnitId}
+        initialInspectionId={focusedWorkflowSession?.inspectionId || selectedInspectionId}
+        initialStep={focusedWorkflowSession?.step === 'select' ? 'inspection' : focusedWorkflowSession?.step}
+        initialRoomId={focusedWorkflowSession?.roomId || null}
+        initialItemId={focusedWorkflowSession?.itemId || null}
+        initialSubmissionState={focusedWorkflowSession?.submissionState || null}
+        onContextChange={(context) => {
+          const nextFocusedSession: FocusedWorkflowSession = {
+            intent: context.intent,
+            step: context.step,
+            unitId: context.unitId || null,
+            inspectionId: context.inspectionId || null,
+            roomId: context.roomId || null,
+            itemId: context.itemId || null,
+            scopeSection: context.scopeSection || null,
+            scopeTarget: context.scopeTarget || null,
+            procurementRequirementId: context.procurementRequirementId || null,
+            submissionState: context.submissionState || null,
+          };
+          setFocusedRoute(
+            context.step === 'select'
+              ? 'inspection'
+              : context.step
+          );
+          focusedWorkflowSessionRef.current = nextFocusedSession;
+          setFocusedWorkflowSession(nextFocusedSession);
+        }}
+        onExit={() => setFocusedRoute('home')}
+        onOpenProcurement={(options) => {
+          setFocusedRoute('materials');
+          const nextSession = focusedWorkflowSessionRef.current
+            ? {
+                ...focusedWorkflowSessionRef.current,
+                step: 'materials' as const,
+                procurementRequirementId:
+                  options?.requirementId ||
+                  options?.requirementIds?.[0] ||
+                  focusedWorkflowSessionRef.current.procurementRequirementId ||
+                  null,
+                submissionState: focusedWorkflowSessionRef.current.submissionState || null,
+              }
+            : focusedWorkflowSessionRef.current;
+          focusedWorkflowSessionRef.current = nextSession;
+          setFocusedWorkflowSession(nextSession);
+          setAppMode('full');
+          openProcurement(options);
+        }}
+      />
     );
   };
 
@@ -458,6 +674,10 @@ const AppContent: React.FC = () => {
   };
 
   const renderContent = () => {
+    if (appMode === 'focused') {
+      return renderFocusedContent();
+    }
+
     if (currentView === 'checklist') {
       return <ChecklistMode rooms={data.rooms} products={data.products} onUpdateProduct={handleUpdateProduct} />;
     }
@@ -631,7 +851,9 @@ const AppContent: React.FC = () => {
           focusedUnitId={focusedProcurementUnitId}
           initialFocus={focusedProcurementStage}
           focusedRequirementId={focusedProcurementRequirementId}
+          focusedRequirementIds={focusedProcurementRequirementIds}
           originContextLabel={focusedProcurementOriginLabel}
+          arrivalContext={focusedProcurementArrivalContext}
           onOpenInspectionScope={(inspectionId, scopeSection, originContextLabel, scopeTarget) =>
             openInspection({
               unitId: focusedProcurementUnitId,
@@ -644,7 +866,9 @@ const AppContent: React.FC = () => {
             setFocusedProcurementUnitId(null);
             setFocusedProcurementStage('all');
             setFocusedProcurementRequirementId(null);
+            setFocusedProcurementRequirementIds([]);
             setFocusedProcurementOriginLabel(null);
+            setFocusedProcurementArrivalContext(null);
           }}
         />
       );
@@ -682,7 +906,17 @@ const AppContent: React.FC = () => {
 
   return (
     <Layout
-      activeTab={currentView}
+      activeTab={
+        appMode === 'focused'
+          ? focusedRoute === 'materials'
+            ? 'focused-materials'
+            : focusedRoute === 'inspection'
+              ? 'focused-inspection'
+              : 'focused-home'
+          : currentView
+      }
+      mode={appMode}
+      onModeChange={handleModeChange}
       onTabChange={(tab) => {
         setCurrentView(normalizeViewForRole(tab));
         setSelectedWorkspaceUnitId(null);

@@ -102,6 +102,15 @@ interface UnitOperationalSignals {
   priorityContext: ReturnType<typeof InspectionAttentionService.derivePriorityContext>;
 }
 
+interface UnitTemplateStatus {
+  layout: LayoutTemplate | null;
+  reason: 'assigned' | 'exact_shape' | 'full_bath_fallback' | 'same_bedroom_fallback' | 'fallback_first_active' | null;
+  statusLabel: string;
+  detail: string;
+  chipClasses: string;
+  canRepair: boolean;
+}
+
 const STATUS_ORDER: InspectionStatusGroup[] = ['in_progress', 'draft', 'completed'];
 
 const STATUS_COPY: Record<InspectionStatusGroup, { title: string; description: string; classes: string }> = {
@@ -267,6 +276,60 @@ const buildWorkspaceAttentionContext = (signals?: UnitOperationalSignals) =>
         reasonDetail: signals.priorityContext.reasonDetail,
       }
     : undefined;
+
+const getTemplateStatusCopy = (status?: UnitTemplateStatus | null) => {
+  if (!status || !status.layout) {
+    return {
+      statusLabel: 'Template missing',
+      detail: 'No deterministic layout match is available yet. Open the unit record to assign one.',
+      chipClasses: 'bg-red-100 text-red-700',
+      canRepair: false,
+    };
+  }
+
+  if (status.reason === 'assigned') {
+    return {
+      statusLabel: `Template ready • ${status.layout.name}`,
+      detail: 'This unit already has a saved layout assignment that drives inspection room structure.',
+      chipClasses: 'bg-emerald-100 text-emerald-700',
+      canRepair: false,
+    };
+  }
+
+  if (status.reason === 'exact_shape') {
+    return {
+      statusLabel: `Suggested template • ${status.layout.name}`,
+      detail: 'This unit is missing an assigned template, but its bedroom and bathroom shape match this layout exactly.',
+      chipClasses: 'bg-amber-100 text-amber-800',
+      canRepair: true,
+    };
+  }
+
+  if (status.reason === 'full_bath_fallback') {
+    return {
+      statusLabel: `Suggested template • ${status.layout.name}`,
+      detail: 'This unit is missing an assigned template. The closest deterministic match uses the same bedrooms and full-bath count.',
+      chipClasses: 'bg-amber-100 text-amber-800',
+      canRepair: true,
+    };
+  }
+
+  if (status.reason === 'same_bedroom_fallback') {
+    return {
+      statusLabel: `Suggested template • ${status.layout.name}`,
+      detail: 'This unit is missing an assigned template. The safest deterministic fallback uses the only active layout for this bedroom count.',
+      chipClasses: 'bg-amber-100 text-amber-800',
+      canRepair: true,
+    };
+  }
+
+  return {
+    statusLabel: `Template fallback • ${status.layout.name}`,
+    detail: 'No explicit or deterministic match exists yet. Focused Mode will still fall back to the first active layout if needed.',
+    chipClasses: 'bg-slate-100 text-slate-700',
+    canRepair: false,
+  };
+};
 
 export const UnitManagement: React.FC<UnitManagementProps> = ({
   onOpenUnitWorkspace,
@@ -494,6 +557,31 @@ export const UnitManagement: React.FC<UnitManagementProps> = ({
     return next;
   }, [findingsByUnitId, inspectionsByUnitId, materialsByUnitId, tasksByUnitId, units]);
 
+  const templateStatusByUnitId = useMemo<Record<string, UnitTemplateStatus>>(() => {
+    const next: Record<string, UnitTemplateStatus> = {};
+    units.forEach((unit) => {
+      const resolved = UnitService.resolveTemplateForUnit(unit, layouts);
+      const copy = getTemplateStatusCopy(
+        resolved.layout
+          ? {
+              layout: resolved.layout,
+              reason: resolved.reason,
+              statusLabel: '',
+              detail: '',
+              chipClasses: '',
+              canRepair: false,
+            }
+          : null
+      );
+      next[unit.id] = {
+        layout: resolved.layout,
+        reason: resolved.reason,
+        ...copy,
+      };
+    });
+    return next;
+  }, [layouts, units]);
+
   const checklistLookup = useMemo(
     () => Object.fromEntries(checklists.map((template) => [template.id, template])),
     [checklists]
@@ -662,8 +750,24 @@ export const UnitManagement: React.FC<UnitManagementProps> = ({
     });
   };
 
+  const handleApplySuggestedTemplate = async (unit: Unit) => {
+    if (!org) return;
+    const templateStatus = templateStatusByUnitId[unit.id];
+    if (!templateStatus?.layout || !templateStatus.canRepair) return;
+
+    const normalizedUnit: Unit = {
+      ...unit,
+      assignedLayoutTemplateId: templateStatus.layout.id,
+    };
+
+    await handleSaveUnit(normalizedUnit);
+    setSelectedUnitId(unit.id);
+    setDetailMode('overview');
+  };
+
   const selectedUnitInspections = selectedUnit ? inspectionsByUnitId[selectedUnit.id] || [] : [];
   const selectedUnitSignals = selectedUnit ? operationalSignalsByUnitId[selectedUnit.id] : undefined;
+  const selectedUnitTemplateStatus = selectedUnit ? templateStatusByUnitId[selectedUnit.id] : null;
 
   const handleSelectUnit = (unitId: string) => {
     setSelectedUnitId(unitId);
@@ -921,6 +1025,7 @@ export const UnitManagement: React.FC<UnitManagementProps> = ({
                                   <div className="mt-3 space-y-2">
                                     {building.units.map((unit) => {
                                       const signals = operationalSignalsByUnitId[unit.id];
+                                      const templateStatus = templateStatusByUnitId[unit.id];
                                       const latestInspection = signals?.latestInspection;
                                       const healthCopy = getHealthCopy(signals);
                                       const hasDirectMatch = Boolean(searchTerm.trim());
@@ -963,7 +1068,7 @@ export const UnitManagement: React.FC<UnitManagementProps> = ({
                                               </span>
                                             </div>
                                           </div>
-                                      <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                                          <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
                                         <span>
                                           {signals?.unresolvedFindingsCount || 0} findings • {signals?.activeTasksCount || 0} tasks •{' '}
                                           {signals?.materialRequirementsCount || 0} materials
@@ -978,6 +1083,18 @@ export const UnitManagement: React.FC<UnitManagementProps> = ({
                                           {signals.priorityDetail ? ` • ${signals.priorityDetail}` : ''}
                                         </div>
                                       ) : null}
+                                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                        <span className={`rounded-full px-2.5 py-1 font-semibold uppercase tracking-wide ${templateStatus?.chipClasses || 'bg-slate-100 text-slate-700'}`}>
+                                          {templateStatus?.layout ? templateStatus.statusLabel : 'Template missing'}
+                                        </span>
+                                        {templateStatus?.reason && templateStatus.reason !== 'assigned' ? (
+                                          <span className="text-slate-500">
+                                            {templateStatus.reason === 'fallback_first_active'
+                                              ? 'Legacy unit still needs a saved template.'
+                                              : 'Legacy unit can be repaired from unit specs.'}
+                                          </span>
+                                        ) : null}
+                                      </div>
                                     </button>
                                   );
                                 })}
@@ -1147,6 +1264,52 @@ export const UnitManagement: React.FC<UnitManagementProps> = ({
                 ) : null}
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 md:col-span-2">
+                    <div className="flex items-center gap-2 text-slate-700">
+                      <Layers3 size={18} />
+                      <h3 className="text-sm font-semibold">Layout template status</h3>
+                    </div>
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <span
+                        data-testid="portfolio-template-status"
+                        className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${selectedUnitTemplateStatus?.chipClasses || 'bg-red-100 text-red-700'}`}
+                      >
+                        {selectedUnitTemplateStatus?.layout ? selectedUnitTemplateStatus.statusLabel : 'Template missing'}
+                      </span>
+                      {selectedUnitTemplateStatus?.layout ? (
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600">
+                          {selectedUnitTemplateStatus.layout.bedrooms} bed /{' '}
+                          {selectedUnitTemplateStatus.layout.bathroomsFull + selectedUnitTemplateStatus.layout.bathroomsHalf * 0.5} bath
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-3 text-sm text-slate-600">
+                      {selectedUnitTemplateStatus?.detail ||
+                        'This unit does not have a saved layout assignment yet. Open the record to assign one before relying on template-backed inspections.'}
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {selectedUnit && selectedUnitTemplateStatus?.canRepair ? (
+                        <button
+                          data-testid="portfolio-apply-suggested-template"
+                          type="button"
+                          onClick={() => void handleApplySuggestedTemplate(selectedUnit)}
+                          className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900 transition-colors hover:bg-amber-100"
+                        >
+                          <Layers3 size={16} />
+                          Apply Suggested Template
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => setDetailMode('record')}
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100"
+                      >
+                        <FolderCog size={16} />
+                        {selectedUnitTemplateStatus?.layout ? 'Review Template Assignment' : 'Assign Template in Record'}
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
                     <div className="flex items-center gap-2 text-slate-700">
                       <Activity size={18} />

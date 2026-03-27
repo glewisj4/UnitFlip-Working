@@ -29,11 +29,13 @@ export const GENERATED_INSPECTION_ITEM_STATUSES = [
   'not_applicable',
   'failed',
 ] as const;
+export const FOCUSED_ITEM_ACTIONS = ['repair', 'replace'] as const;
 
 export type LayoutUnitType = (typeof LAYOUT_UNIT_TYPES)[number];
 export type LayoutRoomType = (typeof LAYOUT_ROOM_TYPES)[number];
 export type ChecklistApplicationMode = (typeof CHECKLIST_APPLICATION_MODES)[number];
 export type GeneratedInspectionItemStatus = (typeof GENERATED_INSPECTION_ITEM_STATUSES)[number];
+export type FocusedItemAction = (typeof FOCUSED_ITEM_ACTIONS)[number];
 
 export interface LayoutRoomBlueprint {
   id: string;
@@ -124,6 +126,7 @@ export interface GeneratedInspectionItem {
   roomType?: LayoutRoomType;
   roomLabel?: string;
   notes?: string;
+  focusedAction?: FocusedItemAction;
   order: number;
   severity?: 'low' | 'medium' | 'high';
   priority?: 'low' | 'medium' | 'high' | 'urgent';
