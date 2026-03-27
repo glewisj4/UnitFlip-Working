@@ -11,8 +11,11 @@ import {
 import { BundleRuleService } from './BundleRuleService';
 import { CatalogService } from './CatalogService';
 
-const getFreshnessLabel = (updatedAt: number): ProcurementOfferFreshnessLabel => {
-  const ageDays = Math.floor((Date.now() - updatedAt) / (1000 * 60 * 60 * 24));
+const getFreshnessLabel = (updatedAt: number | string): ProcurementOfferFreshnessLabel => {
+  const normalizedUpdatedAt =
+    typeof updatedAt === 'string' ? new Date(updatedAt).getTime() : updatedAt;
+  if (!Number.isFinite(normalizedUpdatedAt)) return 'Stale';
+  const ageDays = Math.floor((Date.now() - normalizedUpdatedAt) / (1000 * 60 * 60 * 24));
   if (ageDays <= 7) return 'Fresh';
   if (ageDays <= 30) return 'Recent';
   return 'Stale';

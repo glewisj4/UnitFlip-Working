@@ -214,6 +214,8 @@ export class CatalogImportService {
 
   private static buildCatalogItem(row: ParsedImportRow, categoryId?: string): Omit<CatalogItem, 'id' | 'orgId' | 'createdAt' | 'updatedAt'> {
     return {
+      title: row.name,
+      normalizedTitle: row.name.trim().toLowerCase(),
       name: row.name,
       categoryId,
       categoryName: row.subcategory || row.topLevelCategory,
@@ -228,6 +230,7 @@ export class CatalogImportService {
       defaultQty: row.defaultQty || 1,
       unit: row.unit || 'ea',
       defaultTier: row.defaultTier || Tier.STANDARD,
+      isActive: true,
       options: [
         {
           id: createId(),
