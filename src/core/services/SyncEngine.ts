@@ -11,6 +11,8 @@ import { MediaService } from './MediaService';
 import { AuditLogService } from './AuditLogService';
 import { SyncOp } from '../models/sync';
 import { FeatureFlagService } from './FeatureFlagService';
+import { InspectionService } from './InspectionService';
+import { UnitService } from './UnitService';
 
 const MIN_BACKOFF_MS = 2000;
 const MAX_BACKOFF_MS = 60000;
@@ -294,12 +296,43 @@ export class SyncEngine {
       await ReportService.updateReport(this.orgId, report);
     }
 
+    const inspections = await InspectionService.listInspections(this.orgId);
+    const inspection = inspections.find((entry) => entry.id === inspectionId) || null;
+    const unit = inspection ? await UnitService.getUnit(this.orgId, inspection.unitId) : null;
+
     // 1. Request remote generation
     const { bucket, path } = await this.reportAdapter.requestReportGeneration({
       orgId: this.orgId,
       reportId,
       inspectionId,
-      options
+      options,
+      snapshot: report?.snapshot,
+      inspection: inspection
+        ? {
+            id: inspection.id,
+            title: inspection.title,
+            status: inspection.status,
+            notes: inspection.notes,
+            createdAt: inspection.createdAt,
+            updatedAt: inspection.updatedAt,
+            photoCount: inspection.photoIds?.length || 0,
+          }
+        : undefined,
+      unit: unit
+        ? {
+            id: unit.id,
+            name: unit.name,
+            unitCode: unit.unitCode,
+            facilityName: unit.facilityName,
+            buildingName: unit.buildingName,
+            address1: unit.address1,
+            address2: unit.address2,
+            city: unit.city,
+            state: unit.state,
+            zip: unit.zip,
+            notes: unit.notes,
+          }
+        : undefined,
     });
 
     // 2. Get short-lived signed URL (e.g. 15 mins)
