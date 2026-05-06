@@ -16,14 +16,15 @@ const adapter = createLocalDbAdapter();
 type MaterialRequirementCreateInput = Omit<MaterialRequirement, 'id' | 'createdAt' | 'updatedAt'>;
 
 const deriveProcurementState = (requirement: MaterialRequirement): MaterialProcurementState => {
-  if (requirement.procurementState) {
-    return requirement.procurementState;
-  }
-
   if (requirement.status === 'fulfilled') return 'fulfilled';
   if (requirement.status === 'ordered') return 'ordered';
   if (['planned', 'quoted'].includes(requirement.status)) return 'activated';
   if (requirement.status === 'reviewed' && requirement.selectedMatch) return 'ready_for_procurement';
+
+  if (requirement.procurementState && requirement.procurementState !== 'ready_for_procurement') {
+    return requirement.procurementState;
+  }
+
   return 'scoped_only';
 };
 
