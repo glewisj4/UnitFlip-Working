@@ -13,6 +13,13 @@ dist-ssr
 *.local
 .env
 test-results/
+tmp/
+.codex_*
+.docker-codex/
+.npm-cache-codex/
+.playwright-mcp/
+docker-config-codex/
+supabase/.temp/
 
 # Editor directories and files
 .vscode/*
