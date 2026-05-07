@@ -2,7 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, Loader2, Plus, Trash2, X } from 'lucide-react';
 import {
   CHECKLIST_APPLICATION_MODES,
+  CHECKLIST_DEFAULT_ACTION_MODES,
+  CHECKLIST_ITEM_INPUT_MODES,
+  CHECKLIST_ITEM_TYPES,
+  ChecklistDefaultActionMode,
+  ChecklistItemInputMode,
   ChecklistItemTemplate,
+  ChecklistItemType,
   ChecklistRecipeSection,
   ChecklistTemplate,
   LAYOUT_ROOM_TYPES,
@@ -24,6 +30,10 @@ const createDefaultItem = (): ChecklistItemTemplate => ({
   label: '',
   category: 'general',
   required: true,
+  itemType: 'inspection',
+  inputMode: 'none',
+  supportsAlwaysReplace: false,
+  defaultActionMode: 'inspect',
 });
 
 const createDefaultSection = (index: number): ChecklistRecipeSection => ({
@@ -104,11 +114,26 @@ export const ChecklistTemplateEditorModal: React.FC<ChecklistTemplateEditorModal
           title: section.title.trim(),
           order: sectionIndex + 1,
           roomType: section.appliesTo === 'unit' ? undefined : section.roomType,
-          items: section.items.map((item) => ({
-            ...item,
-            label: item.label.trim(),
-            category: item.category.trim() || 'general',
-          })),
+          items: section.items.map((item) => {
+            const itemType = item.itemType || 'inspection';
+            const inputMode = item.inputMode || 'none';
+            const defaultQuantity =
+              inputMode === 'count' && typeof item.defaultQuantity === 'number' && item.defaultQuantity > 0
+                ? item.defaultQuantity
+                : undefined;
+
+            return {
+              ...item,
+              label: item.label.trim(),
+              category: item.category.trim() || 'general',
+              itemType,
+              inputMode,
+              defaultQuantity,
+              supportsAlwaysReplace: Boolean(item.supportsAlwaysReplace || itemType === 'always_replace'),
+              defaultActionMode:
+                item.defaultActionMode || (itemType === 'always_replace' ? 'always_replace' : 'inspect'),
+            };
+          }),
         })),
       };
 
@@ -276,7 +301,7 @@ export const ChecklistTemplateEditorModal: React.FC<ChecklistTemplateEditorModal
 
                   <div className="space-y-3">
                     {section.items.map((item, itemIndex) => (
-                      <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1.3fr_0.9fr_auto] gap-3 items-start rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <div key={item.id} className="grid grid-cols-1 md:grid-cols-[1.2fr_0.8fr_0.8fr_0.8fr_auto] gap-3 items-start rounded-lg border border-slate-200 bg-slate-50 p-3">
                         <div>
                           <label className="block text-xs font-medium text-slate-500 mb-1">Item Label</label>
                           <input
@@ -322,6 +347,166 @@ export const ChecklistTemplateEditorModal: React.FC<ChecklistTemplateEditorModal
                             }
                             className="w-full rounded-lg border border-slate-300 px-3 py-2"
                           />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-500 mb-1">Item Type</label>
+                          <select
+                            value={item.itemType || 'inspection'}
+                            onChange={(event) => {
+                              const nextItemType = event.target.value as ChecklistItemType;
+                              updateSections(
+                                sections.map((entry) =>
+                                  entry.id !== section.id
+                                    ? entry
+                                    : {
+                                        ...entry,
+                                        items: entry.items.map((listItem) =>
+                                          listItem.id === item.id
+                                            ? {
+                                                ...listItem,
+                                                itemType: nextItemType,
+                                                supportsAlwaysReplace:
+                                                  nextItemType === 'always_replace' || Boolean(listItem.supportsAlwaysReplace),
+                                                defaultActionMode:
+                                                  nextItemType === 'always_replace'
+                                                    ? 'always_replace'
+                                                    : listItem.defaultActionMode === 'always_replace'
+                                                      ? 'inspect'
+                                                      : listItem.defaultActionMode || 'inspect',
+                                                inputMode:
+                                                  nextItemType === 'always_replace' && (!listItem.inputMode || listItem.inputMode === 'none')
+                                                    ? 'count'
+                                                    : listItem.inputMode || 'none',
+                                                defaultQuantity:
+                                                  nextItemType === 'always_replace' && (!listItem.inputMode || listItem.inputMode === 'none')
+                                                    ? listItem.defaultQuantity || 1
+                                                    : listItem.defaultQuantity,
+                                              }
+                                            : listItem
+                                        ),
+                                      }
+                                )
+                              );
+                            }}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 bg-white capitalize"
+                          >
+                            {CHECKLIST_ITEM_TYPES.map((itemType) => (
+                              <option key={itemType} value={itemType}>
+                                {itemType.replace(/_/g, ' ')}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-500 mb-1">Input Mode</label>
+                          <select
+                            value={item.inputMode || 'none'}
+                            onChange={(event) => {
+                              const nextInputMode = event.target.value as ChecklistItemInputMode;
+                              updateSections(
+                                sections.map((entry) =>
+                                  entry.id !== section.id
+                                    ? entry
+                                    : {
+                                        ...entry,
+                                        items: entry.items.map((listItem) =>
+                                          listItem.id === item.id
+                                            ? {
+                                                ...listItem,
+                                                inputMode: nextInputMode,
+                                                defaultQuantity:
+                                                  nextInputMode === 'count' ? listItem.defaultQuantity || 1 : undefined,
+                                              }
+                                            : listItem
+                                        ),
+                                      }
+                                )
+                              );
+                            }}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 bg-white capitalize"
+                          >
+                            {CHECKLIST_ITEM_INPUT_MODES.map((inputMode) => (
+                              <option key={inputMode} value={inputMode}>
+                                {inputMode.replace(/_/g, ' ')}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-500 mb-1">Default Mode</label>
+                          <select
+                            value={item.defaultActionMode || 'inspect'}
+                            onChange={(event) => {
+                              const nextActionMode = event.target.value as ChecklistDefaultActionMode;
+                              updateSections(
+                                sections.map((entry) =>
+                                  entry.id !== section.id
+                                    ? entry
+                                    : {
+                                        ...entry,
+                                        items: entry.items.map((listItem) =>
+                                          listItem.id === item.id
+                                            ? {
+                                                ...listItem,
+                                                defaultActionMode: nextActionMode,
+                                                itemType:
+                                                  nextActionMode === 'always_replace'
+                                                    ? 'always_replace'
+                                                    : listItem.itemType || 'inspection',
+                                                supportsAlwaysReplace:
+                                                  nextActionMode === 'always_replace' || Boolean(listItem.supportsAlwaysReplace),
+                                                inputMode:
+                                                  nextActionMode === 'always_replace' && (!listItem.inputMode || listItem.inputMode === 'none')
+                                                    ? 'count'
+                                                    : listItem.inputMode || 'none',
+                                                defaultQuantity:
+                                                  nextActionMode === 'always_replace' && (!listItem.inputMode || listItem.inputMode === 'none')
+                                                    ? listItem.defaultQuantity || 1
+                                                    : listItem.defaultQuantity,
+                                              }
+                                            : listItem
+                                        ),
+                                      }
+                                )
+                              );
+                            }}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 bg-white capitalize"
+                          >
+                            {CHECKLIST_DEFAULT_ACTION_MODES.map((actionMode) => (
+                              <option key={actionMode} value={actionMode}>
+                                {actionMode.replace(/_/g, ' ')}
+                              </option>
+                            ))}
+                          </select>
+                          {(item.inputMode || 'none') === 'count' ? (
+                            <label className="mt-2 block text-xs font-medium text-slate-500">
+                              Default Quantity
+                              <input
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={item.defaultQuantity || 1}
+                                onChange={(event) => {
+                                  const nextQuantity = Math.max(1, Math.floor(Number(event.target.value) || 1));
+                                  updateSections(
+                                    sections.map((entry) =>
+                                      entry.id !== section.id
+                                        ? entry
+                                        : {
+                                            ...entry,
+                                            items: entry.items.map((listItem) =>
+                                              listItem.id === item.id
+                                                ? { ...listItem, defaultQuantity: nextQuantity }
+                                                : listItem
+                                            ),
+                                          }
+                                    )
+                                  );
+                                }}
+                                className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                              />
+                            </label>
+                          ) : null}
                         </div>
                         <div className="flex items-center gap-2 pt-6">
                           <button
