@@ -110,6 +110,7 @@ export interface CatalogItem {
   topLevelCategory?: string;
   subcategory?: string;
   equivalentGroup?: string;
+  archetypeId?: string;
   functionalTags?: string[];
   vendor?: string;
   importSource?: 'manual' | 'csv' | 'text_paste' | 'quote_pdf' | 'quick_add';
@@ -124,6 +125,7 @@ export interface CatalogItem {
 
   source?: string;
   sourceRef?: string;
+  categoryAssignment?: CatalogCategoryAssignment;
 
   createdAt: string | number;
   updatedAt: string | number;
@@ -132,6 +134,7 @@ export interface CatalogItem {
 
   lastVerifiedAt?: string;
   notes?: string;
+  sourceConfidence?: CatalogSourceConfidence;
 
   // Legacy fields for backward compatibility
   defaultQty?: number;
