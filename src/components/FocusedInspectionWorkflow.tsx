@@ -32,6 +32,7 @@ import { ProductRecommendationService } from '../core/services/ProductRecommenda
 import { RepairTaskService } from '../core/services/RepairTaskService';
 import { ReportService } from '../core/services/ReportService';
 import { UnitService } from '../core/services/UnitService';
+import { ChecklistAlwaysReplaceService } from '../core/services/ChecklistAlwaysReplaceService';
 import { FocusedTopControlBar } from './FocusedTopControlBar';
 
 type FocusedWorkflowIntent = 'inspection' | 'materials';
@@ -129,6 +130,27 @@ const titleCase = (value?: string | null) =>
     .replace(/\b\w/g, (character) => character.toUpperCase());
 const isIssueFocusedAction = (action?: FocusedItemAction | null): action is Extract<FocusedItemAction, 'repair' | 'replace'> =>
   action === 'repair' || action === 'replace';
+const isAlwaysReplaceChecklistItem = (item: GeneratedInspectionItem) => item.itemType === 'always_replace';
+const hasLinkedAlwaysReplaceRecords = (item: GeneratedInspectionItem) =>
+  ((item.repairTaskIds?.length || 0) > 0) || ((item.materialRequirementIds?.length || 0) > 0);
+const getAlwaysReplaceCountQuantity = (item: GeneratedInspectionItem) =>
+  Math.max(1, Math.round(Number(item.inputValue?.quantity ?? item.defaultQuantity ?? 1)) || 1);
+const isAlwaysReplaceInputComplete = (item: GeneratedInspectionItem) => {
+  if (!isAlwaysReplaceChecklistItem(item)) return false;
+  if (hasLinkedAlwaysReplaceRecords(item)) return true;
+  if (item.inputMode === 'count') {
+    return typeof item.inputValue?.quantity === 'number' && item.inputValue.quantity > 0;
+  }
+  if (item.inputMode === 'dimensions') {
+    return Boolean(item.inputValue?.dimensions && item.inputValue.dimensions.width > 0 && item.inputValue.dimensions.height > 0);
+  }
+  if (item.inputMode === 'area') {
+    return Boolean(item.inputValue?.area && item.inputValue.area > 0);
+  }
+  return false;
+};
+const isFocusedItemHandled = (item: GeneratedInspectionItem) =>
+  isAlwaysReplaceChecklistItem(item) ? hasLinkedAlwaysReplaceRecords(item) : Boolean(item.focusedAction);
 const getFocusedActionLabel = (action?: FocusedItemAction | null) => {
   if (action === 'good') return 'Good';
   if (action === 'repair') return 'Repair selected';
@@ -364,7 +386,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
   const currentRoomItems = useMemo(() => currentRoomSections.flatMap((section) => section.items), [currentRoomSections]);
   const allGeneratedItems = useMemo(() => generatedSections.flatMap((section) => section.items), [generatedSections]);
   const decisionProgress = useMemo(() => {
-    const inspectedCount = allGeneratedItems.filter((item) => Boolean(item.focusedAction)).length;
+    const inspectedCount = allGeneratedItems.filter((item) => isFocusedItemHandled(item)).length;
     const totalCount = allGeneratedItems.length;
     const decisionsLeft = Math.max(totalCount - inspectedCount, 0);
     return {
@@ -375,7 +397,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
     };
   }, [allGeneratedItems]);
   const currentRoomProgress = useMemo(() => {
-    const handledCount = currentRoomItems.filter((item) => Boolean(item.focusedAction)).length;
+    const handledCount = currentRoomItems.filter((item) => isFocusedItemHandled(item)).length;
     const totalCount = currentRoomItems.length;
     const leftCount = Math.max(totalCount - handledCount, 0);
     return {
@@ -411,7 +433,8 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
             .filter(
               (item) =>
                 (isIssueFocusedAction(item.focusedAction) && (item.materialRequirementIds?.length || 0) === 0) ||
-                (((item.notes || '').trim() || item.photoIds.length > 0) && !item.focusedAction)
+                (isAlwaysReplaceChecklistItem(item) && !hasLinkedAlwaysReplaceRecords(item)) ||
+                (((item.notes || '').trim() || item.photoIds.length > 0) && !isFocusedItemHandled(item))
             )
             .map((item) => ({ sectionId: section.id, roomId: getRoomKey(section), item }))
       ),
@@ -422,7 +445,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
       roomGroups.filter((room) =>
         !generatedSections
           .filter((section) => getRoomKey(section) === room.id)
-          .some((section) => section.items.some((item) => isIssueFocusedAction(item.focusedAction) || (item.notes || '').trim() || item.photoIds.length > 0))
+          .some((section) => section.items.some((item) => isIssueFocusedAction(item.focusedAction) || hasLinkedAlwaysReplaceRecords(item) || (item.notes || '').trim() || item.photoIds.length > 0))
       ),
     [generatedSections, roomGroups]
   );
@@ -702,6 +725,23 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
           }
     );
     await persistInspectionSections(nextSections, successMessage, itemId);
+  };
+
+  const updateAlwaysReplaceInputDraft = (
+    sectionId: string,
+    itemId: string,
+    updater: (item: GeneratedInspectionItem) => GeneratedInspectionItem
+  ) => {
+    setGeneratedSections((current) =>
+      current.map((section) =>
+        section.id !== sectionId
+          ? section
+          : {
+              ...section,
+              items: section.items.map((item) => (item.id !== itemId ? item : updater(item))),
+            }
+      )
+    );
   };
 
   const ensureInspectionForUnit = async (unit: Unit): Promise<Inspection> => {
@@ -1012,6 +1052,51 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
       await refreshAfterChange();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save the photo.');
+    }
+  };
+
+  const handleAlwaysReplaceCommit = async (section: GeneratedInspectionSection, item: GeneratedInspectionItem) => {
+    if (!ensureEditableInspection('save this standard replacement')) return;
+    if (!org || !user || !inspection || !selectedUnit) return;
+    if (!isAlwaysReplaceChecklistItem(item)) return;
+
+    try {
+      const existingTask = (item.repairTaskIds || []).map((id) => taskMap.get(id)).find(Boolean) || null;
+      const existingRequirement = (item.materialRequirementIds || []).map((id) => materialMap.get(id)).find(Boolean) || null;
+      const { task, requirement } = await ChecklistAlwaysReplaceService.commitItem({
+        orgId: org.id,
+        userId: user.id,
+        inspectionId: inspection.id,
+        unitId: selectedUnit.id,
+        section,
+        item,
+        existingTask,
+        existingRequirement,
+      });
+
+      const nextSections = generatedSections.map((entry) =>
+        entry.id !== section.id
+          ? entry
+          : {
+              ...entry,
+              items: entry.items.map((listItem) =>
+                listItem.id !== item.id
+                  ? listItem
+                  : {
+                      ...item,
+                      status: 'completed',
+                      repairTaskIds: Array.from(new Set([...(item.repairTaskIds || []), task.id])),
+                      materialRequirementIds: Array.from(new Set([...(item.materialRequirementIds || []), requirement.id])),
+                      updatedAt: Date.now(),
+                    }
+              ),
+            }
+      );
+      await persistInspectionSections(nextSections, 'Standard replacement saved to materials.', item.id);
+      await refreshAfterChange();
+      setGlobalMessage('Standard replacement quantity saved and added to materials.');
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save the standard replacement.');
     }
   };
 
@@ -1410,9 +1495,10 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
       return { roomId, itemId: preferredItemId };
     }
     const preferredItem =
+      roomItems.find((item) => isAlwaysReplaceChecklistItem(item) && !hasLinkedAlwaysReplaceRecords(item)) ||
       roomItems.find((item) => item.focusedAction && (item.materialRequirementIds?.length || 0) === 0) ||
-      roomItems.find((item) => (((item.notes || '').trim() || item.photoIds.length > 0) && !item.focusedAction)) ||
-      roomItems.find((item) => item.focusedAction) ||
+      roomItems.find((item) => (((item.notes || '').trim() || item.photoIds.length > 0) && !isFocusedItemHandled(item))) ||
+      roomItems.find((item) => isFocusedItemHandled(item)) ||
       roomItems.find((item) => (item.notes || '').trim() || item.photoIds.length > 0) ||
       roomItems[0];
     return { roomId, itemId: preferredItem?.id || null };
@@ -1683,8 +1769,9 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
                       ? saveState.message || 'Retry'
                       : null
                 : null;
-            const isRowHandled = Boolean(item.focusedAction);
-            const showIssueMaterialControls = isIssueFocusedAction(item.focusedAction);
+            const isAlwaysReplaceRow = isAlwaysReplaceChecklistItem(item);
+            const isRowHandled = isFocusedItemHandled(item);
+            const showIssueMaterialControls = !isAlwaysReplaceRow && isIssueFocusedAction(item.focusedAction);
 
             return (
               <div
@@ -1710,14 +1797,18 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
                       <span
                           className={[
                             'rounded-full px-3 py-1 text-xs font-semibold',
-                            item.focusedAction === 'good'
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : isIssueFocusedAction(item.focusedAction)
-                                ? 'bg-blue-100 text-blue-700'
-                                : 'bg-slate-100 text-slate-500',
+                            isAlwaysReplaceRow
+                              ? hasLinkedAlwaysReplaceRecords(item)
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : 'bg-amber-100 text-amber-800'
+                              : item.focusedAction === 'good'
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : isIssueFocusedAction(item.focusedAction)
+                                  ? 'bg-blue-100 text-blue-700'
+                                  : 'bg-slate-100 text-slate-500',
                           ].join(' ')}
                         >
-                          {rowSaveCopy || getFocusedActionLabel(item.focusedAction)}
+                          {rowSaveCopy || (isAlwaysReplaceRow ? (hasLinkedAlwaysReplaceRecords(item) ? 'Quantity saved' : 'Quantity needed') : getFocusedActionLabel(item.focusedAction))}
                         </span>
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs text-slate-500">
@@ -1730,20 +1821,157 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap gap-2">
-                    {(['good', 'repair', 'replace'] as FocusedItemAction[]).map((action) => (
+                  {isAlwaysReplaceRow ? (
+                    <div className="min-w-[220px] rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3">
+                      {item.inputMode === 'count' ? (
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            aria-label={`Decrease ${item.label} quantity`}
+                            onClick={() =>
+                              updateAlwaysReplaceInputDraft(section.id, item.id, (entry) => ({
+                                ...entry,
+                                inputValue: {
+                                  ...(entry.inputValue || {}),
+                                  quantity: Math.max(1, getAlwaysReplaceCountQuantity(entry) - 1),
+                                  updatedAt: Date.now(),
+                                },
+                              }))
+                            }
+                            className="h-9 w-9 rounded-xl border border-amber-200 bg-white text-lg font-semibold text-amber-900"
+                          >
+                            -
+                          </button>
+                          <input
+                            type="number"
+                            min="1"
+                            aria-label={`${item.label} quantity`}
+                            value={getAlwaysReplaceCountQuantity(item)}
+                            onChange={(event) =>
+                              updateAlwaysReplaceInputDraft(section.id, item.id, (entry) => ({
+                                ...entry,
+                                inputValue: {
+                                  ...(entry.inputValue || {}),
+                                  quantity: Math.max(1, Math.round(Number(event.target.value || 1)) || 1),
+                                  updatedAt: Date.now(),
+                                },
+                              }))
+                            }
+                            className="h-9 w-16 rounded-xl border border-amber-200 bg-white px-2 text-center text-sm font-semibold text-slate-900 outline-none focus:border-lowes-blue"
+                          />
+                          <button
+                            type="button"
+                            aria-label={`Increase ${item.label} quantity`}
+                            onClick={() =>
+                              updateAlwaysReplaceInputDraft(section.id, item.id, (entry) => ({
+                                ...entry,
+                                inputValue: {
+                                  ...(entry.inputValue || {}),
+                                  quantity: getAlwaysReplaceCountQuantity(entry) + 1,
+                                  updatedAt: Date.now(),
+                                },
+                              }))
+                            }
+                            className="h-9 w-9 rounded-xl border border-amber-200 bg-white text-lg font-semibold text-amber-900"
+                          >
+                            +
+                          </button>
+                        </div>
+                      ) : item.inputMode === 'dimensions' ? (
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            aria-label={`${item.label} width`}
+                            value={item.inputValue?.dimensions?.width ?? ''}
+                            onChange={(event) =>
+                              updateAlwaysReplaceInputDraft(section.id, item.id, (entry) => ({
+                                ...entry,
+                                inputValue: {
+                                  ...(entry.inputValue || {}),
+                                  dimensions: {
+                                    width: Number(event.target.value || 0),
+                                    height: entry.inputValue?.dimensions?.height || 0,
+                                    unit: entry.inputValue?.dimensions?.unit || 'in',
+                                  },
+                                  updatedAt: Date.now(),
+                                },
+                              }))
+                            }
+                            placeholder="Width"
+                            className="h-9 rounded-xl border border-amber-200 bg-white px-2 text-sm outline-none focus:border-lowes-blue"
+                          />
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.1"
+                            aria-label={`${item.label} height`}
+                            value={item.inputValue?.dimensions?.height ?? ''}
+                            onChange={(event) =>
+                              updateAlwaysReplaceInputDraft(section.id, item.id, (entry) => ({
+                                ...entry,
+                                inputValue: {
+                                  ...(entry.inputValue || {}),
+                                  dimensions: {
+                                    width: entry.inputValue?.dimensions?.width || 0,
+                                    height: Number(event.target.value || 0),
+                                    unit: entry.inputValue?.dimensions?.unit || 'in',
+                                  },
+                                  updatedAt: Date.now(),
+                                },
+                              }))
+                            }
+                            placeholder="Height"
+                            className="h-9 rounded-xl border border-amber-200 bg-white px-2 text-sm outline-none focus:border-lowes-blue"
+                          />
+                        </div>
+                      ) : item.inputMode === 'area' ? (
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          aria-label={`${item.label} area`}
+                          value={item.inputValue?.area ?? ''}
+                          onChange={(event) =>
+                            updateAlwaysReplaceInputDraft(section.id, item.id, (entry) => ({
+                              ...entry,
+                              inputValue: {
+                                ...(entry.inputValue || {}),
+                                area: Number(event.target.value || 0) || undefined,
+                                updatedAt: Date.now(),
+                              },
+                            }))
+                          }
+                          placeholder="Area"
+                          className="h-9 w-full rounded-xl border border-amber-200 bg-white px-3 text-sm outline-none focus:border-lowes-blue"
+                        />
+                      ) : null}
                       <button
-                        key={action}
                         type="button"
-                        onClick={() => void handleActionChange(section, item, action)}
-                        className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
-                          item.focusedAction === action ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-white text-slate-700'
-                        }`}
+                        onClick={() => void handleAlwaysReplaceCommit(section, item)}
+                        disabled={!isAlwaysReplaceInputComplete(item)}
+                        className="mt-2 w-full rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {titleCase(action)}
+                        {hasLinkedAlwaysReplaceRecords(item) ? 'Update Quantity' : 'Save Quantity'}
                       </button>
-                    ))}
-                  </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {(['good', 'repair', 'replace'] as FocusedItemAction[]).map((action) => (
+                        <button
+                          key={action}
+                          type="button"
+                          onClick={() => void handleActionChange(section, item, action)}
+                          className={`rounded-2xl px-4 py-2 text-sm font-semibold transition ${
+                            item.focusedAction === action ? 'bg-slate-900 text-white' : 'border border-slate-200 bg-white text-slate-700'
+                          }`}
+                        >
+                          {titleCase(action)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-3">
@@ -2041,7 +2269,13 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
                   <div>
                     <div className="font-medium text-amber-950">{item.label}</div>
                     <div className="mt-1 text-sm text-amber-900/80">
-                      {item.focusedAction ? 'Action selected, but a product is still missing.' : 'Notes or photos exist, but no Repair/Replace action is selected yet.'}
+                      {isAlwaysReplaceChecklistItem(item)
+                        ? hasLinkedAlwaysReplaceRecords(item)
+                          ? 'Quantity is saved, but the downstream material still needs review.'
+                          : 'This standard replacement still needs quantity confirmation.'
+                        : item.focusedAction
+                          ? 'Action selected, but a product is still missing.'
+                          : 'Notes or photos exist, but no Repair/Replace action is selected yet.'}
                     </div>
                   </div>
                   <button type="button" onClick={() => openReviewTarget(roomId, item.id)} className="text-sm font-medium text-amber-900">
