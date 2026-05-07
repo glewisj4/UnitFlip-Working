@@ -18,9 +18,34 @@ interface CreateInspectionOptions {
   notes?: string;
 }
 
+const normalizeGeneratedItem = (item: GeneratedInspectionItem): GeneratedInspectionItem => ({
+  ...item,
+  repairOptions: item.repairOptions || [],
+  replaceOptions: item.replaceOptions || [],
+  requiresMeasurements: Boolean(item.requiresMeasurements),
+  dataFields: item.dataFields || [],
+  supportsAlwaysReplace: Boolean(item.supportsAlwaysReplace || item.itemType === 'always_replace'),
+  defaultActionMode: item.defaultActionMode || (item.itemType === 'always_replace' ? 'always_replace' : 'inspect'),
+  preferredReplaceOption: item.preferredReplaceOption || undefined,
+  preferredProductTier: item.preferredProductTier || undefined,
+  turnoverPresetId: item.turnoverPresetId || null,
+  turnoverPresetNotes: item.turnoverPresetNotes || undefined,
+  itemType: item.itemType || 'inspection',
+  inputMode: item.inputMode || 'none',
+  repairTaskIds: item.repairTaskIds || [],
+  materialRequirementIds: item.materialRequirementIds || [],
+  findingIds: item.findingIds || [],
+  photoIds: item.photoIds || [],
+});
+
 const normalizeInspection = (inspection: Inspection): Inspection => ({
   ...inspection,
   isInspectionFinalized: Boolean(inspection.isInspectionFinalized),
+  generatedSections: (inspection.generatedSections || []).map((section) => ({
+    ...section,
+    items: (section.items || []).map((item) => normalizeGeneratedItem(item)),
+  })),
+  generatedItems: (inspection.generatedItems || []).map((item) => normalizeGeneratedItem(item)),
 });
 
 export const InspectionService = {
@@ -72,7 +97,7 @@ export const InspectionService = {
     await SyncQueueService.enqueue(orgId, {
         type: 'UPSERT_INSPECTION',
         userId,
-        payload: normalizeInspection(newInspection) as unknown as Record<string, unknown>
+      payload: normalizeInspection(newInspection) as unknown as Record<string, unknown>
     });
 
     return normalizeInspection(newInspection);
@@ -95,7 +120,7 @@ export const InspectionService = {
     await SyncQueueService.enqueue(orgId, {
         type: 'UPSERT_INSPECTION',
         userId,
-        payload: normalizedInspection as unknown as Record<string, unknown>
+      payload: normalizedInspection as unknown as Record<string, unknown>
     });
   },
 

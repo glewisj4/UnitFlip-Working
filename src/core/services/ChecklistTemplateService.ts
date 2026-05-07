@@ -84,6 +84,21 @@ const validateChecklistTemplate = (template: Pick<ChecklistTemplate, 'name' | 'r
       if (!item.label.trim()) {
         throw new Error(`Section "${section.title}" contains an empty checklist item label.`);
       }
+
+      if (item.requiresMeasurements && (!item.dataFields || item.dataFields.map((entry) => entry.trim()).filter(Boolean).length === 0)) {
+        throw new Error(`Checklist item "${item.label}" requires measurements but does not define any data fields.`);
+      }
+
+      if (item.defaultActionMode === 'always_replace' && item.itemType === 'inspection') {
+        throw new Error(`Checklist item "${item.label}" cannot default to always replace while staying typed as inspection.`);
+      }
+
+      if (item.itemType === 'always_replace' && item.inputMode === 'count') {
+        const quantity = item.defaultQuantity ?? 0;
+        if (quantity <= 0) {
+          throw new Error(`Always-replace item "${item.label}" must define a positive default quantity for count input.`);
+        }
+      }
     });
   });
 };
