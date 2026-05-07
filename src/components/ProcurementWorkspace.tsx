@@ -24,8 +24,10 @@ import {
   ProcurementVendorRiskSignal,
   SelectedProcurementOption,
 } from '../core/models/procurement';
+import { CatalogItem } from '../core/models/types';
 import { InspectionService } from '../core/services/InspectionService';
 import { AuthPolicyService } from '../core/services/AuthPolicyService';
+import { CatalogService } from '../core/services/CatalogService';
 import { ClientLoggerService } from '../core/services/ClientLoggerService';
 import { MaterialRequirementService } from '../core/services/MaterialRequirementService';
 import { MaterialMatchingService } from '../core/services/MaterialMatchingService';
@@ -447,6 +449,40 @@ const summarizeVendorInsight = (draft: ProcurementDraft): string | null => {
   return `${vendorItems.length} item${vendorItems.length === 1 ? '' : 's'} have selected vendor guidance${staleCount > 0 ? `, including ${staleCount} stale offer${staleCount === 1 ? '' : 's'}` : ''}${cheaperAlternativeCount > 0 ? ` and ${cheaperAlternativeCount} cheaper alternative signal${cheaperAlternativeCount === 1 ? '' : 's'}` : ''}.`;
 };
 
+const summarizeBundleEngine = (draft: ProcurementDraft): string | null => {
+  if (!draft.bundleSuggestions?.length) {
+    return null;
+  }
+  const totalLines = draft.bundleSuggestions.reduce((sum, bundle) => sum + bundle.lines.length, 0);
+  return `${draft.bundleSuggestions.length} bundle suggestion${draft.bundleSuggestions.length === 1 ? '' : 's'} across ${totalLines} suggested procurement line${totalLines === 1 ? '' : 's'}.`;
+};
+
+const summarizeBundleProductResolution = (draft: ProcurementDraft): string | null => {
+  if (!draft.bundleProductRecommendations?.length) {
+    return null;
+  }
+  const resolvedCount = draft.bundleProductRecommendations.filter((entry) => entry.status === 'resolved').length;
+  const manualCount = draft.bundleProductRecommendations.filter((entry) => entry.status === 'manual_needed').length;
+  return `${resolvedCount} bundle product recommendation${resolvedCount === 1 ? '' : 's'} resolved${manualCount > 0 ? `, ${manualCount} still need manual review` : ''}.`;
+};
+
+const summarizeRecommendationAttachments = (draft: ProcurementDraft): string | null => {
+  if (!draft.recommendationAttachments?.length) {
+    return null;
+  }
+  const attachedCount = draft.recommendationAttachments.filter((entry) => entry.attachmentState === 'attached').length;
+  const recommendedCount = draft.recommendationAttachments.filter((entry) => entry.attachmentState === 'recommended').length;
+  const manualCount = draft.recommendationAttachments.filter((entry) => entry.attachmentState === 'manual_needed').length;
+  return `${attachedCount} attached, ${recommendedCount} draft-ready recommendation${recommendedCount === 1 ? '' : 's'}, ${manualCount} manual-needed line${manualCount === 1 ? '' : 's'}.`;
+};
+
+const summarizePromotedLines = (draft: ProcurementDraft): string | null => {
+  if (!draft.promotedLines?.length) {
+    return null;
+  }
+  return `${draft.promotedLines.length} promoted draft line${draft.promotedLines.length === 1 ? '' : 's'} ready for procurement refinement.`;
+};
+
 const getReviewGuidanceEntries = (draft: ProcurementDraft) =>
   draft.items.flatMap((item) =>
     (item.reviewGuidance || []).map((entry) => ({
@@ -534,6 +570,7 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
   const [requirements, setRequirements] = useState<MaterialRequirement[]>([]);
   const [inspections, setInspections] = useState<Inspection[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
+  const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
   const [drafts, setDrafts] = useState<ProcurementDraft[]>([]);
   const [selectedRequirementIds, setSelectedRequirementIds] = useState<string[]>([]);
   const [groupBy, setGroupBy] = useState<GroupBy>('inspection');
@@ -548,6 +585,7 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
   const [isExportingMaintenanceSnapshot, setIsExportingMaintenanceSnapshot] = useState(false);
   const [refreshingDraftId, setRefreshingDraftId] = useState<string | null>(null);
   const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
+  const [promotingAttachmentId, setPromotingAttachmentId] = useState<string | null>(null);
   const [savingAnnotationDraftId, setSavingAnnotationDraftId] = useState<string | null>(null);
   const [draftAnnotations, setDraftAnnotations] = useState<Record<string, string>>({});
   const [assignmentSelections, setAssignmentSelections] = useState<Record<string, string>>({});
@@ -566,7 +604,7 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
   const requirementRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const canManageProcurement = AuthPolicyService.canActivateProcurement(role, permissions);
   const canViewProcurement = AuthPolicyService.canAccessView(permissions, 'procurement');
-  const isVendorView = role === 'vendor';
+  const isVendorView = AuthPolicyService.canPerformVendorActions(role, permissions);
   const canManageAssignments = AuthPolicyService.canManageVendorAssignments(role, permissions);
   const canManageVerification = AuthPolicyService.canManageProcurementVerification(role, permissions);
   const canManageCloseoutExceptions = AuthPolicyService.canManageCloseoutExceptions(role, permissions);
@@ -577,15 +615,17 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
     if (!org) return;
     setIsLoading(true);
     try {
-      const [loadedRequirements, loadedInspections, loadedUnits, loadedDrafts] = await Promise.all([
+      const [loadedRequirements, loadedInspections, loadedUnits, loadedDrafts, loadedCatalogItems] = await Promise.all([
         MaterialRequirementService.listRequirements(org.id),
         InspectionService.listInspections(org.id),
         UnitService.listUnits(org.id),
         ProcurementDraftService.listDrafts(org.id),
+        CatalogService.getItems(org.id),
       ]);
       setRequirements(loadedRequirements);
       setInspections(loadedInspections);
       setUnits(loadedUnits.filter((unit) => unit.status !== 'archived'));
+      setCatalogItems(loadedCatalogItems);
       setDrafts(loadedDrafts);
       setAssignmentSelections(
         Object.fromEntries(
@@ -1751,6 +1791,68 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
       setMessage(error instanceof Error ? error.message : 'Failed to refresh procurement intelligence.');
     } finally {
       setRefreshingDraftId(null);
+    }
+  };
+
+  const handlePromoteRecommendationAttachment = async (draft: ProcurementDraft, attachmentId: string) => {
+    if (!org || !canManageProcurement) return;
+    setPromotingAttachmentId(attachmentId);
+    setMessage(null);
+    try {
+      const updated = await ProcurementDraftService.updateRecommendationAttachmentState(
+        org.id,
+        draft.id,
+        attachmentId,
+        'attached'
+      );
+      setMessage(`Attached a draft-ready product recommendation in "${updated.name}".`);
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      setMessage(error instanceof Error ? error.message : 'Failed to attach the recommendation to the draft.');
+    } finally {
+      setPromotingAttachmentId(null);
+    }
+  };
+
+  const handlePromoteAttachedLine = async (draft: ProcurementDraft, attachmentId: string) => {
+    if (!org || !canManageProcurement) return;
+    setPromotingAttachmentId(attachmentId);
+    setMessage(null);
+    try {
+      const updated = await ProcurementDraftService.promoteAttachmentToDraftLine(org.id, draft.id, attachmentId);
+      setMessage(`Promoted an attached recommendation into a draft line in "${updated.name}".`);
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      setMessage(error instanceof Error ? error.message : 'Failed to promote the attached recommendation into a draft line.');
+    } finally {
+      setPromotingAttachmentId(null);
+    }
+  };
+
+  const handlePromotedLineOptionChange = async (
+    draft: ProcurementDraft,
+    promotedLineId: string,
+    optionId: string
+  ) => {
+    if (!org || !canManageProcurement) return;
+    setPromotingAttachmentId(promotedLineId);
+    setMessage(null);
+    try {
+      const updated = await ProcurementDraftService.updatePromotedLineOption(
+        org.id,
+        draft.id,
+        promotedLineId,
+        optionId
+      );
+      setMessage(`Updated the promoted draft line option in "${updated.name}".`);
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      setMessage(error instanceof Error ? error.message : 'Failed to update the promoted draft line option.');
+    } finally {
+      setPromotingAttachmentId(null);
     }
   };
 
@@ -3043,6 +3145,10 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
                       const reviewGuidanceEntries = getReviewGuidanceEntries(draft);
                       const optimizationStats = getOptimizationStats(draft);
                       const vendorStats = getVendorStats(draft);
+                      const bundleSummary = summarizeBundleEngine(draft);
+                      const bundleProductSummary = summarizeBundleProductResolution(draft);
+                      const attachmentSummary = summarizeRecommendationAttachments(draft);
+                      const promotedLineSummary = summarizePromotedLines(draft);
                       const refreshRecency = getRefreshRecency(draft.intelligenceRefreshedAt);
                       const refreshChanges = summarizeRefreshChanges(draft);
 
@@ -3079,10 +3185,19 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
                         </button>
                       </div>
                     </div>
-                    <div className="text-sm text-slate-500 mt-1">
-                      {draft.itemCount} items • {titleCase(draft.status)}
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">
+                        {draft.itemCount} items
+                      </span>
+                      <span className="rounded-full bg-blue-100 px-2 py-1 text-[11px] font-medium text-blue-700">
+                        {titleCase(draft.status)}
+                      </span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">
+                        {draft.items.filter((item) => item.selectedMatch).length} matched
+                      </span>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700">
+                        {draft.items.filter((item) => !item.selectedMatch).length} unmatched
+                      </span>
                       {hasManualNote(draft) ? (
                         <span className="rounded-full bg-violet-100 px-2 py-1 text-[11px] font-medium text-violet-700">
                           Has Manual Note
@@ -3092,10 +3207,6 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
                           No Manual Note
                         </span>
                       )}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-2">
-                      {draft.items.filter((item) => item.selectedMatch).length} matched •{' '}
-                      {draft.items.filter((item) => !item.selectedMatch).length} unmatched
                     </div>
                     <div className="text-xs text-slate-400 mt-2">
                       {new Date(draft.updatedAt).toLocaleString()}
@@ -3312,6 +3423,209 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
                                 ) : null}
                               </div>
                             ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {bundleSummary ? (
+                      <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-blue-800">
+                            Bundle Engine
+                          </div>
+                          <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-blue-700">
+                            Suggested groupings
+                          </span>
+                        </div>
+                        <div className="mt-2 text-sm text-blue-900">{bundleSummary}</div>
+                        <div className="mt-3 space-y-2">
+                          {(draft.bundleSuggestions || []).slice(0, 3).map((bundle) => (
+                            <div key={bundle.id} className="rounded-md bg-white px-3 py-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="text-xs font-medium text-slate-800">{bundle.label}</div>
+                                {bundle.preferredProductTier ? (
+                                  <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                                    {bundle.preferredProductTier}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {bundle.sourceGeneratedItemIds.length} trigger item{bundle.sourceGeneratedItemIds.length === 1 ? '' : 's'} • {bundle.lines.length} line suggestion{bundle.lines.length === 1 ? '' : 's'}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {bundleProductSummary ? (
+                      <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
+                            Product Resolution
+                          </div>
+                          <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-emerald-700">
+                            Draft-ready bridge
+                          </span>
+                        </div>
+                        <div className="mt-2 text-sm text-emerald-900">{bundleProductSummary}</div>
+                        {attachmentSummary ? (
+                          <div className="mt-1 text-xs text-emerald-800">{attachmentSummary}</div>
+                        ) : null}
+                        {promotedLineSummary ? (
+                          <div className="mt-1 text-xs text-emerald-800">{promotedLineSummary}</div>
+                        ) : null}
+                        <div className="mt-3 space-y-2">
+                          {(draft.bundleProductRecommendations || []).slice(0, 4).map((recommendation) => {
+                            const attachment = (draft.recommendationAttachments || []).find(
+                              (entry) => entry.recommendationId === recommendation.id
+                            );
+                            const promotedLine = (draft.promotedLines || []).find(
+                              (entry) => entry.recommendationId === recommendation.id
+                            );
+                            const promotedCatalogItem = promotedLine?.productId
+                              ? catalogItems.find((item) => item.id === promotedLine.productId)
+                              : null;
+                            const promotedOptions = promotedCatalogItem?.options?.length
+                              ? promotedCatalogItem.options
+                              : promotedCatalogItem
+                                ? [{
+                                    id: `fallback:${promotedCatalogItem.id}`,
+                                    name: promotedCatalogItem.title || promotedCatalogItem.name,
+                                    price: promotedCatalogItem.defaultPrice || 0,
+                                    sku: promotedCatalogItem.itemNumber || promotedCatalogItem.id,
+                                    brand: promotedCatalogItem.vendor || promotedCatalogItem.brand,
+                                  }]
+                                : [];
+                            return (
+                              <div key={recommendation.id} className="rounded-lg border border-emerald-100 bg-white px-3 py-3">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <div className="text-xs font-medium text-slate-800">{recommendation.bundleLineLabel}</div>
+                                    <div className="mt-1 text-[11px] text-slate-500">{recommendation.bundleLabel}</div>
+                                  </div>
+                                  <div className="flex flex-wrap items-center justify-end gap-2">
+                                    {attachment ? (
+                                      <span
+                                        className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                                          attachment.attachmentState === 'attached'
+                                            ? 'bg-blue-100 text-blue-700'
+                                            : attachment.attachmentState === 'recommended'
+                                              ? 'bg-emerald-100 text-emerald-700'
+                                              : 'bg-amber-100 text-amber-800'
+                                        }`}
+                                      >
+                                        {attachment.attachmentState === 'attached'
+                                          ? 'Attached'
+                                          : attachment.attachmentState === 'recommended'
+                                            ? 'Recommended'
+                                            : 'Manual Needed'}
+                                      </span>
+                                    ) : null}
+                                    <span
+                                      className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                                        recommendation.status === 'resolved'
+                                          ? 'bg-emerald-100 text-emerald-700'
+                                          : 'bg-amber-100 text-amber-800'
+                                      }`}
+                                    >
+                                      {recommendation.status === 'resolved' ? titleCase(recommendation.resolutionMethod) : 'Manual Needed'}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="mt-2 text-xs text-slate-500">
+                                  {recommendation.status === 'resolved'
+                                    ? `${recommendation.recommendedProductLabel} • ${recommendation.quantity ?? 'Manual'} ${recommendation.unit}`
+                                    : 'No safe catalog recommendation yet.'}
+                                </div>
+                                {attachment ? (
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    Draft attachment: {attachment.attachmentState === 'attached'
+                                      ? 'Attached and ready for draft-line promotion.'
+                                      : attachment.attachmentState === 'recommended'
+                                        ? 'Ready to attach into the draft.'
+                                        : 'Needs manual product selection before attachment.'}
+                                  </div>
+                                ) : null}
+                                {promotedLine ? (
+                                  <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="text-[11px] font-semibold uppercase tracking-wide text-sky-800">
+                                        Promoted Draft Line
+                                      </div>
+                                      <span className="rounded-full bg-sky-100 px-2 py-1 text-[11px] font-medium text-sky-700">
+                                        Draft Line
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 text-xs text-slate-700">
+                                      {promotedLine.label} • {promotedLine.quantity ?? 'Manual'} {promotedLine.unit || 'ea'}
+                                      {typeof promotedLine.estimatedLineCost === 'number'
+                                        ? ` • $${promotedLine.estimatedLineCost.toFixed(2)}`
+                                        : ''}
+                                    </div>
+                                    <div className="mt-1 text-xs text-slate-500">
+                                      SKU {promotedLine.skuCode || 'Not set'} • Vendor {promotedLine.vendorId || 'Unspecified'}
+                                    </div>
+                                    {promotedOptions.length > 1 ? (
+                                      <div className="mt-2 flex items-center gap-2">
+                                        <label className="text-[11px] font-medium text-slate-600" htmlFor={`promoted-line-option-${promotedLine.id}`}>
+                                          Option
+                                        </label>
+                                        <select
+                                          id={`promoted-line-option-${promotedLine.id}`}
+                                          value={promotedLine.optionId || promotedOptions[0]?.id || ''}
+                                          onChange={(event) => void handlePromotedLineOptionChange(draft, promotedLine.id, event.target.value)}
+                                          disabled={!canManageProcurement || promotingAttachmentId === promotedLine.id}
+                                          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                                        >
+                                          {promotedOptions.map((option) => (
+                                            <option key={option.id} value={option.id}>
+                                              {option.name}
+                                              {typeof option.price === 'number' ? ` • $${option.price.toFixed(2)}` : ''}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                    ) : null}
+                                    {recommendation.alternates.length > 0 ? (
+                                      <div className="mt-2 text-xs text-slate-500">
+                                        Alternate products: {recommendation.alternates.slice(0, 2).map((alternate) => alternate.productLabel).join(' • ')}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                                {recommendation.alternates.length > 0 ? (
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    Alternates: {recommendation.alternates.slice(0, 2).map((alternate) => alternate.productLabel).join(' • ')}
+                                  </div>
+                                ) : null}
+                                {canManageProcurement && attachment?.attachmentState === 'recommended' ? (
+                                  <div className="mt-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => void handlePromoteRecommendationAttachment(draft, attachment.id)}
+                                      disabled={promotingAttachmentId === attachment.id}
+                                      className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-emerald-100 px-3 py-1.5 text-[11px] font-medium text-emerald-800 hover:bg-emerald-200 disabled:opacity-50"
+                                    >
+                                      {promotingAttachmentId === attachment.id ? <Loader2 size={12} className="animate-spin" /> : null}
+                                      Attach to Draft
+                                    </button>
+                                  </div>
+                                ) : null}
+                                {canManageProcurement && attachment?.attachmentState === 'attached' && !promotedLine ? (
+                                  <div className="mt-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => void handlePromoteAttachedLine(draft, attachment.id)}
+                                      disabled={promotingAttachmentId === attachment.id}
+                                      className="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-blue-100 px-3 py-1.5 text-[11px] font-medium text-blue-800 hover:bg-blue-200 disabled:opacity-50"
+                                    >
+                                      {promotingAttachmentId === attachment.id ? <Loader2 size={12} className="animate-spin" /> : null}
+                                      Promote to Draft Line
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     ) : null}
