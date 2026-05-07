@@ -11,6 +11,7 @@ import { MediaService } from './MediaService';
 import { AuditLogService } from './AuditLogService';
 import { SyncOp } from '../models/sync';
 import { FeatureFlagService } from './FeatureFlagService';
+import { PhotoUploadVariant } from '../models/media';
 import { InspectionService } from './InspectionService';
 import { UnitService } from './UnitService';
 
@@ -219,7 +220,7 @@ export class SyncEngine {
       return;
     }
 
-    const { photoId, variants } = op.payload as { photoId: string; variants: ('full' | 'thumb')[] };
+    const { photoId, variants } = op.payload as { photoId: string; variants: PhotoUploadVariant[] };
     const asset = await MediaService.getPhotoAsset(this.orgId, photoId);
     if (!asset) {
       throw new Error(`Photo asset ${photoId} not found`);

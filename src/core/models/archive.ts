@@ -1,3 +1,5 @@
+import { PhotoUploadVariant } from './media';
+
 export type ArchiveStatus = 'queued' | 'generating' | 'ready' | 'failed';
 
 export interface ArchiveJob {
@@ -10,7 +12,7 @@ export interface ArchiveJob {
   pendingPurgeId: string;
   photoId: string;
 
-  variant: 'full' | 'thumb';
+  variant: PhotoUploadVariant;
   status: ArchiveStatus;
   errorMessage?: string;
 

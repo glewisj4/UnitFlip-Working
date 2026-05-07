@@ -1,4 +1,5 @@
 export type CaptureSource = 'camera' | 'gallery' | 'file';
+export type PhotoUploadVariant = 'full' | 'thumb';
 
 export interface CompressionOptions {
   maxBytes: number;
