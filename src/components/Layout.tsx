@@ -198,96 +198,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
     return (
       <div className="min-h-screen bg-slate-50">
         <main className="min-h-screen">
-          <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-6 py-4 shadow-sm backdrop-blur">
-            <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-lowes-blue text-sm font-bold text-white">
-                  UF
-                </div>
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">Focused Mode</div>
-                  <h2 className="text-2xl font-bold text-slate-900">{viewLabels[activeTab] || 'Focused Workflow'}</h2>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="inline-flex rounded-2xl border border-slate-200 bg-slate-50 p-1">
-                  <button
-                    type="button"
-                    onClick={() => onModeChange?.('focused')}
-                    className={`rounded-2xl px-4 py-2 text-sm font-medium ${mode === 'focused' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}
-                  >
-                    Focused Mode
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onModeChange?.('full')}
-                    className="rounded-2xl px-4 py-2 text-sm font-medium text-slate-600"
-                  >
-                    Full Mode
-                  </button>
-                </div>
-                {role === 'developer' ? (
-                  <button
-                    type="button"
-                    onClick={handleSeedDemoData}
-                    disabled={isSeedingDemoData || !org || !user}
-                    className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    title="Developer-only demo portfolio seed trigger"
-                  >
-                    {isSeedingDemoData ? 'Seeding Demo Data…' : 'Seed Demo Data'}
-                  </button>
-                ) : null}
-                {user && org && role ? (
-                  <div className="hidden rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-right md:block">
-                    <div className="flex items-center justify-end gap-2">
-                      <span className="text-[11px] uppercase tracking-wide text-slate-400">Local Session</span>
-                      <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white">
-                        {role}
-                      </span>
-                    </div>
-                    <div className="text-sm font-medium text-slate-900">{user.name}</div>
-                    <div className="text-xs text-slate-500">{org.name}</div>
-                  </div>
-                ) : null}
-                <div className="flex items-center gap-2 text-sm">
-                  {!isOnline ? (
-                    <span className="flex items-center gap-1 rounded-full border border-red-100 bg-red-50 px-2 py-1 text-red-500">
-                      <WifiOff size={14} />
-                      Offline
-                    </span>
-                  ) : isSyncing ? (
-                    <span className="flex items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-2 py-1 text-blue-600">
-                      <RefreshCw size={14} className="animate-spin" />
-                      Syncing...
-                    </span>
-                  ) : (
-                    <button 
-                      onClick={triggerSyncNow}
-                      className="flex items-center gap-1 rounded-full border border-green-100 bg-green-50 px-2 py-1 text-green-600 transition-colors hover:bg-green-100"
-                      title={lastSyncAt ? `Last synced ${new Date(lastSyncAt).toLocaleTimeString()}` : 'Synced'}
-                    >
-                      <Wifi size={14} />
-                      Synced
-                    </button>
-                  )}
-                </div>
-                {user ? (
-                  <button
-                    type="button"
-                    onClick={handleSignOut}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                  >
-                    Switch Session
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          </header>
-
-          <div className="mx-auto max-w-7xl p-6">{children}</div>
+          <div className="mx-auto max-w-7xl px-0 pb-4 md:pb-6">{children}</div>
         </main>
 
-        <FeedbackButton onClick={handleOpenFeedback} />
+        <FeedbackButton onClick={handleOpenFeedback} compactOnMobile />
         <FeedbackPanel
           isOpen={isFeedbackOpen}
           category={feedbackCategory}

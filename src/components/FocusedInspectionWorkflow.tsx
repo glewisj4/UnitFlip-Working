@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArrowLeft,
   Camera,
   ClipboardList,
   Home,
@@ -31,6 +32,7 @@ import { ProductRecommendationService } from '../core/services/ProductRecommenda
 import { RepairTaskService } from '../core/services/RepairTaskService';
 import { ReportService } from '../core/services/ReportService';
 import { UnitService } from '../core/services/UnitService';
+import { FocusedTopControlBar } from './FocusedTopControlBar';
 
 type FocusedWorkflowIntent = 'inspection' | 'materials';
 type FocusedStep = 'select' | 'inspection' | 'summary' | 'materials';
@@ -60,6 +62,7 @@ interface FocusedInspectionWorkflowProps {
   initialItemId?: string | null;
   initialSubmissionState?: FocusedSubmissionState | null;
   onExit: () => void;
+  onSwitchFullMode?: () => void;
   onContextChange?: (context: FocusedWorkflowContext) => void;
   onOpenProcurement?: (options?: {
     unitId?: string | null;
@@ -209,6 +212,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
   initialItemId,
   initialSubmissionState,
   onExit,
+  onSwitchFullMode,
   onContextChange,
   onOpenProcurement,
 }) => {
@@ -1366,7 +1370,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
             {intent === 'materials' ? 'Choose a unit to review materials.' : 'Choose a unit to start inspection.'}
           </h2>
         </div>
-        <button type="button" onClick={onExit} className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700">
+        <button type="button" onClick={handleExitRequest} className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700">
           Back
         </button>
       </div>
@@ -2169,7 +2173,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
           <div data-testid="focused-materials-heartbeat" className="mt-1 text-[11px] text-slate-400">{focusedHeartbeat.label}</div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={onExit} className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-medium text-white">
+          <button type="button" onClick={handleExitRequest} className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-medium text-white">
             Save for Later
           </button>
           {!isInspectionFinalized ? (
@@ -2188,9 +2192,56 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
     </section>
   );
 
+  const handleExitRequest = () => {
+    if (saveState.phase === 'saving') {
+      setErrorMessage('A save is still running. Wait for it to finish, then choose Back again.');
+      return;
+    }
+    if (saveState.phase === 'failed' && !window.confirm('Leave Focused Mode with a failed save still showing?')) {
+      return;
+    }
+    onExit();
+  };
+
+  const handleFullModeRequest = () => {
+    const hasFocusedContext = Boolean(inspection?.id || selectedUnit?.id || step !== 'select');
+    if (
+      hasFocusedContext &&
+      !window.confirm('Switch to Full Mode? Your focused inspection context will open in the full workspace.')
+    ) {
+      return;
+    }
+    onSwitchFullMode?.();
+  };
+
+  const focusedMobileTitle =
+    step === 'inspection'
+      ? roomGroups.find((room) => room.id === selectedRoomId)?.label || inspection?.title || 'Inspection'
+      : step === 'summary'
+        ? 'Summary'
+        : step === 'materials'
+          ? 'Materials'
+          : 'Focused Mode';
   return (
     <>
-      {isLoading ? skeleton : step === 'select' ? renderUnitSelection() : step === 'inspection' ? renderInspectionStep() : step === 'summary' ? renderSummaryStep() : renderMaterialsStep()}
+      <FocusedTopControlBar
+        title={focusedMobileTitle}
+        onSwitchFullMode={handleFullModeRequest}
+        leftControl={
+          <button
+            type="button"
+            onClick={handleExitRequest}
+            className="inline-flex h-10 min-w-[72px] items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:bg-slate-50"
+            aria-label="Exit Focused Mode"
+          >
+            <ArrowLeft size={16} />
+            <span>Back</span>
+          </button>
+        }
+      />
+      <div className="px-4 pb-6 pt-[calc(4rem+env(safe-area-inset-top))] sm:px-6">
+        {isLoading ? skeleton : step === 'select' ? renderUnitSelection() : step === 'inspection' ? renderInspectionStep() : step === 'summary' ? renderSummaryStep() : renderMaterialsStep()}
+      </div>
       {showDuplicateModal && pendingCreateDraft ? (
         <div data-testid="focused-duplicate-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
           <div className="w-full max-w-2xl rounded-[28px] border border-slate-200 bg-white p-6 shadow-2xl">

@@ -1,67 +1,67 @@
 import React from 'react';
 import { ClipboardList, PackageCheck } from 'lucide-react';
+import { FocusedTopControlBar } from './FocusedTopControlBar';
 
 interface FocusedHomeProps {
   canStartInspection: boolean;
   canProcessMaterials: boolean;
   onStartInspection: () => void;
   onProcessMaterials: () => void;
+  onSwitchFullMode: () => void;
 }
 
 const actionCardClass =
-  'flex min-h-[220px] flex-col justify-between rounded-[28px] border border-slate-200 bg-white p-8 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-lowes-blue hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0';
+  'flex min-h-[180px] flex-col justify-between rounded-[24px] border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-lowes-blue hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0';
 
 export const FocusedHome: React.FC<FocusedHomeProps> = ({
   canStartInspection,
   canProcessMaterials,
   onStartInspection,
   onProcessMaterials,
+  onSwitchFullMode,
 }) => {
   return (
-    <section data-testid="focused-home-screen" className="mx-auto max-w-5xl space-y-8">
-      <div className="rounded-[32px] border border-slate-200 bg-white px-8 py-10 shadow-sm">
-        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Focused Mode</p>
-        <h1 className="mt-3 text-4xl font-semibold tracking-tight text-slate-900">Simple inspection and materials flow.</h1>
-        <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-600">
-          Start a unit inspection, build the materials list inline, review the summary, and hand materials forward without opening the full operations workspace.
-        </p>
-      </div>
+    <>
+      <FocusedTopControlBar title="Focused Mode" onSwitchFullMode={onSwitchFullMode} />
+      <section data-testid="focused-home-screen" className="mx-auto max-w-5xl space-y-4">
+        <div className="space-y-1 px-1">
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Focused Mode</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Start work fast.</h1>
+          <p className="text-sm text-slate-600">Inspect a unit or move materials forward.</p>
+        </div>
 
-      <div className="grid gap-5 md:grid-cols-2">
-        <button data-testid="focused-home-start-inspection" type="button" onClick={onStartInspection} disabled={!canStartInspection} className={actionCardClass}>
-          <div className="space-y-4">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-lowes-blue">
-              <ClipboardList size={24} />
+        <div className="grid gap-4 md:grid-cols-2">
+          <button data-testid="focused-home-start-inspection" type="button" onClick={onStartInspection} disabled={!canStartInspection} className={actionCardClass}>
+            <div className="space-y-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-lowes-blue">
+                <ClipboardList size={20} />
+              </div>
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Start Inspection</div>
+                <p className="mt-1 text-sm text-slate-600">Choose a unit and continue the guided capture flow.</p>
+              </div>
             </div>
-            <div>
-              <div className="text-2xl font-semibold text-slate-900">Start Inspection</div>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Choose or add a unit, walk rooms quickly, attach notes and photos inline, and build the materials list as you go.
-              </p>
+            <div className="text-sm font-medium text-slate-500">
+              {canStartInspection ? 'Primary action' : 'Inspection is unavailable for the current role.'}
             </div>
-          </div>
-          <div className="text-sm font-medium text-slate-500">
-            {canStartInspection ? 'Create or resume a focused inspection.' : 'Inspection is unavailable for the current role.'}
-          </div>
-        </button>
+          </button>
 
-        <button data-testid="focused-home-process-materials" type="button" onClick={onProcessMaterials} disabled={!canProcessMaterials} className={actionCardClass}>
-          <div className="space-y-4">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
-              <PackageCheck size={24} />
+          <button data-testid="focused-home-process-materials" type="button" onClick={onProcessMaterials} disabled={!canProcessMaterials} className={actionCardClass}>
+            <div className="space-y-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700">
+                <PackageCheck size={20} />
+              </div>
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Process Materials</div>
+                <p className="mt-1 text-sm text-slate-600">Review the current materials list and hand it forward.</p>
+              </div>
             </div>
-            <div>
-              <div className="text-2xl font-semibold text-slate-900">Process Materials</div>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Review the current materials list, confirm cost, and submit work into the existing procurement path with less navigation.
-              </p>
+            <div className="text-sm font-medium text-slate-500">
+              {canProcessMaterials ? 'Secondary action' : 'Materials processing is unavailable for the current role.'}
             </div>
-          </div>
-          <div className="text-sm font-medium text-slate-500">
-            {canProcessMaterials ? 'Open the focused materials review flow.' : 'Materials processing is unavailable for the current role.'}
-          </div>
-        </button>
-      </div>
-    </section>
+          </button>
+        </div>
+      </section>
+    </>
   );
 };
