@@ -4,6 +4,18 @@ export enum Tier {
   PREMIUM = 'Premium',
 }
 
+export type CatalogSourceConfidence = 'high' | 'medium' | 'low';
+
+export interface CatalogArchetype {
+  id: string;
+  displayName: string;
+  categoryHint: string;
+  keywords: string[];
+  unitType: string;
+  lowesCategoryHint?: string;
+  equivalentGroup?: string;
+}
+
 export enum ProductStatus {
   PLANNING = 'Planning',
   REPLACED = 'Replaced',
