@@ -127,6 +127,14 @@ const titleCase = (value?: string | null) =>
   (value || '')
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (character) => character.toUpperCase());
+const isIssueFocusedAction = (action?: FocusedItemAction | null): action is Extract<FocusedItemAction, 'repair' | 'replace'> =>
+  action === 'repair' || action === 'replace';
+const getFocusedActionLabel = (action?: FocusedItemAction | null) => {
+  if (action === 'good') return 'Good';
+  if (action === 'repair') return 'Repair selected';
+  if (action === 'replace') return 'Replace selected';
+  return 'Not reviewed';
+};
 
 const formatSyncRecency = (timestamp?: number) => {
   if (!timestamp) return null;
@@ -400,8 +408,12 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
     () =>
       generatedSections.flatMap((section) =>
         section.items
-          .filter((item) => (item.focusedAction && (item.materialRequirementIds?.length || 0) === 0) || (((item.notes || '').trim() || item.photoIds.length > 0) && !item.focusedAction))
-          .map((item) => ({ sectionId: section.id, roomId: getRoomKey(section), item }))
+            .filter(
+              (item) =>
+                (isIssueFocusedAction(item.focusedAction) && (item.materialRequirementIds?.length || 0) === 0) ||
+                (((item.notes || '').trim() || item.photoIds.length > 0) && !item.focusedAction)
+            )
+            .map((item) => ({ sectionId: section.id, roomId: getRoomKey(section), item }))
       ),
     [generatedSections]
   );
@@ -410,7 +422,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
       roomGroups.filter((room) =>
         !generatedSections
           .filter((section) => getRoomKey(section) === room.id)
-          .some((section) => section.items.some((item) => item.focusedAction || (item.notes || '').trim() || item.photoIds.length > 0))
+          .some((section) => section.items.some((item) => isIssueFocusedAction(item.focusedAction) || (item.notes || '').trim() || item.photoIds.length > 0))
       ),
     [generatedSections, roomGroups]
   );
@@ -747,7 +759,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
     }
   };
 
-  const createOrUpdateIssueRecords = async (section: GeneratedInspectionSection, item: GeneratedInspectionItem, action: FocusedItemAction) => {
+  const createOrUpdateIssueRecords = async (section: GeneratedInspectionSection, item: GeneratedInspectionItem, action: Extract<FocusedItemAction, 'repair' | 'replace'>) => {
     if (!org || !user || !inspection || !selectedUnit) {
       throw new Error('The focused inspection context is unavailable.');
     }
@@ -876,6 +888,28 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
     setErrorMessage(null);
     setGlobalMessage(null);
     try {
+      if (action === 'good') {
+        const nextSections = generatedSections.map((entry) =>
+          entry.id !== section.id
+            ? entry
+            : {
+                ...entry,
+                items: entry.items.map((listItem) =>
+                  listItem.id !== item.id
+                    ? listItem
+                    : {
+                        ...listItem,
+                        focusedAction: action,
+                        status: 'completed',
+                      }
+                ),
+              }
+        );
+        await persistInspectionSections(nextSections, 'Good saved on this device.', item.id);
+        await refreshAfterChange();
+        return;
+      }
+
       const { finding, task } = await createOrUpdateIssueRecords(section, item, action);
       const nextSections = generatedSections.map((entry) =>
         entry.id !== section.id
@@ -895,10 +929,10 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
               ),
             }
       );
-      await persistInspectionSections(nextSections, `${titleCase(action)} saved on this device.`, item.id);
+      await persistInspectionSections(nextSections, titleCase(action) + ' saved on this device.', item.id);
       await refreshAfterChange();
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to save the issue action.');
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to save the item decision.');
     }
   };
 
@@ -1635,38 +1669,56 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
               label: item.label,
               notes: noteDrafts[item.id] || item.notes,
               roomLabel: item.roomLabel || selectedRoomId || undefined,
-              kind: item.focusedAction || undefined,
+              kind: isIssueFocusedAction(item.focusedAction) ? item.focusedAction : undefined,
             });
             const productChoices = recommended.suggestedProducts.length > 0
               ? recommended.suggestedProducts.map((entry) => entry.item)
-              : catalogItems.slice(0, 12);
-            const rowSaveCopy =
+              : catalogItems.slice(0, 12);            const rowSaveCopy =
               saveState.itemId === item.id
                 ? saveState.phase === 'saving'
-                  ? saveState.message || 'Saving…'
+                  ? saveState.message || 'Saving...'
                   : saveState.phase === 'saved'
                     ? saveState.message || 'Saved locally'
                     : saveState.phase === 'failed'
                       ? saveState.message || 'Retry'
                       : null
                 : null;
+            const isRowHandled = Boolean(item.focusedAction);
+            const showIssueMaterialControls = isIssueFocusedAction(item.focusedAction);
 
             return (
               <div
                 key={item.id}
                 data-testid={`focused-item-${item.id}`}
                 ref={(node) => {
-                  itemRefs.current[item.id] = node;
-                }}
-                className={`rounded-[28px] border p-5 shadow-sm transition ${focusedItemId === item.id ? 'border-lowes-blue bg-blue-50/70' : 'border-slate-200 bg-white'}`}
+                    itemRefs.current[item.id] = node;
+                  }}
+                  onClick={() => setFocusedItemId(item.id)}
+                  className={[
+                    'rounded-[28px] border shadow-sm transition',
+                    focusedItemId === item.id
+                      ? 'border-lowes-blue bg-blue-50/70 p-5'
+                      : isRowHandled
+                        ? 'border-slate-200 bg-white p-4'
+                        : 'border-slate-200 bg-white p-3',
+                  ].join(' ')}
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-lg font-semibold text-slate-900">{item.label}</div>
-                      {rowSaveCopy ? (
-                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{rowSaveCopy}</span>
-                      ) : null}
+                      <span
+                          className={[
+                            'rounded-full px-3 py-1 text-xs font-semibold',
+                            item.focusedAction === 'good'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : isIssueFocusedAction(item.focusedAction)
+                                ? 'bg-blue-100 text-blue-700'
+                                : 'bg-slate-100 text-slate-500',
+                          ].join(' ')}
+                        >
+                          {rowSaveCopy || getFocusedActionLabel(item.focusedAction)}
+                        </span>
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs text-slate-500">
                       <span className="rounded-full bg-slate-100 px-2.5 py-1">{item.photoIds.length} photos</span>
@@ -1679,7 +1731,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
                   </div>
 
                   <div className="flex flex-wrap gap-2">
-                    {(['repair', 'replace'] as FocusedItemAction[]).map((action) => (
+                    {(['good', 'repair', 'replace'] as FocusedItemAction[]).map((action) => (
                       <button
                         key={action}
                         type="button"
@@ -1742,7 +1794,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
                   <div className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">{noteDrafts[item.id]}</div>
                 ) : null}
 
-                {item.focusedAction ? (
+                {showIssueMaterialControls ? (
                   <div className="mt-4 rounded-[24px] border border-slate-200 bg-slate-50 p-4">
                     <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_120px_auto]">
                       <label className="block">
@@ -1911,7 +1963,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="text-base font-semibold text-slate-900">{room.label}</div>
-                    <div className="mt-1 text-sm text-slate-500">{roomItems.filter((item) => item.focusedAction).length} issue actions</div>
+                    <div className="mt-1 text-sm text-slate-500">{roomItems.filter((item) => isIssueFocusedAction(item.focusedAction)).length} issue actions</div>
                   </div>
                   <button
                     type="button"
@@ -1925,11 +1977,11 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
                   </button>
                 </div>
                 <div className="mt-4 space-y-2">
-                  {roomItems.filter((item) => item.focusedAction).length === 0 ? (
+                  {roomItems.filter((item) => isIssueFocusedAction(item.focusedAction)).length === 0 ? (
                     <div className="text-sm text-slate-500">No issue actions captured for this room.</div>
                   ) : (
                     roomItems
-                      .filter((item) => item.focusedAction)
+                      .filter((item) => isIssueFocusedAction(item.focusedAction))
                       .map((item) => {
                         const requirement = (item.materialRequirementIds || []).map((id) => materialMap.get(id)).find(Boolean) || null;
                         return (

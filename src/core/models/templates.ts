@@ -29,7 +29,7 @@ export const GENERATED_INSPECTION_ITEM_STATUSES = [
   'not_applicable',
   'failed',
 ] as const;
-export const FOCUSED_ITEM_ACTIONS = ['repair', 'replace'] as const;
+export const FOCUSED_ITEM_ACTIONS = ['good', 'repair', 'replace'] as const;
 
 export type LayoutUnitType = (typeof LAYOUT_UNIT_TYPES)[number];
 export type LayoutRoomType = (typeof LAYOUT_ROOM_TYPES)[number];
