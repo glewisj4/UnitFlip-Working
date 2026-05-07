@@ -354,6 +354,32 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
     [generatedSections, selectedRoomId]
   );
   const currentRoomItems = useMemo(() => currentRoomSections.flatMap((section) => section.items), [currentRoomSections]);
+  const allGeneratedItems = useMemo(() => generatedSections.flatMap((section) => section.items), [generatedSections]);
+  const decisionProgress = useMemo(() => {
+    const inspectedCount = allGeneratedItems.filter((item) => Boolean(item.focusedAction)).length;
+    const totalCount = allGeneratedItems.length;
+    const decisionsLeft = Math.max(totalCount - inspectedCount, 0);
+    return {
+      inspectedCount,
+      totalCount,
+      decisionsLeft,
+      percentComplete: totalCount > 0 ? Math.round((inspectedCount / totalCount) * 100) : 0,
+    };
+  }, [allGeneratedItems]);
+  const currentRoomProgress = useMemo(() => {
+    const handledCount = currentRoomItems.filter((item) => Boolean(item.focusedAction)).length;
+    const totalCount = currentRoomItems.length;
+    const leftCount = Math.max(totalCount - handledCount, 0);
+    return {
+      handledCount,
+      totalCount,
+      leftCount,
+      isComplete: totalCount > 0 && leftCount === 0,
+    };
+  }, [currentRoomItems]);
+  const currentRoomIndex = roomGroups.findIndex((room) => room.id === selectedRoomId);
+  const previousRoom = currentRoomIndex > 0 ? roomGroups[currentRoomIndex - 1] : null;
+  const nextRoom = currentRoomIndex >= 0 && currentRoomIndex < roomGroups.length - 1 ? roomGroups[currentRoomIndex + 1] : null;
   const findingMap = useMemo(() => new Map(findings.map((finding) => [finding.id, finding])), [findings]);
   const taskMap = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
   const materialMap = useMemo(() => new Map(materials.map((material) => [material.id, material])), [materials]);
@@ -1336,6 +1362,14 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
     goToStep('inspection', { roomId, itemId: itemId || null });
   };
 
+  const navigateRoom = (roomId?: string | null) => {
+    if (!roomId) return;
+    const targetRoom = roomGroups.find((room) => room.id === roomId);
+    setSelectedRoomId(roomId);
+    setFocusedItemId(null);
+    setGlobalMessage(targetRoom ? `Moved to ${targetRoom.label}.` : 'Moved to the selected room.');
+  };
+
   const findReviewTarget = (roomId: string, preferredItemId?: string | null) => {
     const roomItems = generatedSections.filter((section) => getRoomKey(section) === roomId).flatMap((section) => section.items);
     if (preferredItemId) {
@@ -1774,6 +1808,44 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
               </div>
             );
           })}
+        </div>
+      </div>
+
+      <div data-testid="focused-room-continuity" className="rounded-[24px] border border-slate-200 bg-white px-5 py-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">
+              {currentRoomProgress.handledCount} / {currentRoomProgress.totalCount} complete &bull; {currentRoomProgress.leftCount} left in this room
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {currentRoomProgress.isComplete
+                ? nextRoom
+                  ? 'This room is complete. Use Next Room when you are ready to continue.'
+                  : 'This room is complete. This is the final room.'
+                : 'Stay in this room until each checklist item has a decision.'}
+            </div>
+          </div>
+          <div data-testid="focused-room-navigation" className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => navigateRoom(previousRoom?.id)}
+              disabled={!previousRoom}
+              className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Previous Room
+            </button>
+            <div className="min-w-[120px] text-center text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {currentRoomIndex >= 0 ? `${currentRoomIndex + 1} of ${roomGroups.length}` : 'No room'}
+            </div>
+            <button
+              type="button"
+              onClick={() => navigateRoom(nextRoom?.id)}
+              disabled={!nextRoom}
+              className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Next Room
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2222,6 +2294,10 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
         : step === 'materials'
           ? 'Materials'
           : 'Focused Mode';
+  const showDecisionProgress = step !== 'select' && decisionProgress.totalCount > 0;
+  const contentTopSpacingClass = showDecisionProgress
+    ? 'pt-[calc(6rem+env(safe-area-inset-top))]'
+    : 'pt-[calc(4rem+env(safe-area-inset-top))]';
   return (
     <>
       <FocusedTopControlBar
@@ -2239,7 +2315,23 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
           </button>
         }
       />
-      <div className="px-4 pb-6 pt-[calc(4rem+env(safe-area-inset-top))] sm:px-6">
+      {showDecisionProgress ? (
+        <div className="fixed inset-x-0 top-[calc(3.5rem+env(safe-area-inset-top))] z-[70] border-b border-slate-200 bg-white/95 backdrop-blur">
+          <div className="mx-auto max-w-7xl px-4 py-2 sm:px-6">
+            <div className="text-xs font-semibold text-slate-600">
+              {decisionProgress.inspectedCount} / {decisionProgress.totalCount} complete &bull; {decisionProgress.decisionsLeft} left
+            </div>
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200">
+              <div
+                data-testid="focused-decision-progress-bar"
+                className="h-full rounded-full bg-lowes-blue transition-[width] duration-200 ease-out"
+                style={{ width: `${decisionProgress.percentComplete}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
+      <div className={`px-4 pb-6 sm:px-6 ${contentTopSpacingClass}`}>
         {isLoading ? skeleton : step === 'select' ? renderUnitSelection() : step === 'inspection' ? renderInspectionStep() : step === 'summary' ? renderSummaryStep() : renderMaterialsStep()}
       </div>
       {showDuplicateModal && pendingCreateDraft ? (
