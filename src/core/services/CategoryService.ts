@@ -25,6 +25,9 @@ export class CategoryService {
       isActive: c.isActive ?? true,
       sortOrder: c.sortOrder ?? 0,
       path: c.path ?? '',
+      aliases: Array.isArray(c.aliases) ? c.aliases : [],
+      keywordHints: Array.isArray(c.keywordHints) ? c.keywordHints : [],
+      lowesCategoryHints: Array.isArray(c.lowesCategoryHints) ? c.lowesCategoryHints : [],
     }));
   }
 
