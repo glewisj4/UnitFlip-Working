@@ -1,8 +1,10 @@
+import { PhotoUploadVariant } from '../models/media';
+
 export interface RemotePhotoAdapter {
   getSignedUploadUrl(params: {
     orgId: string;
     photoId: string;
-    variant: 'full' | 'thumb';
+    variant: PhotoUploadVariant;
     contentType: string;
     sizeBytes: number;
   }): Promise<{ bucket: string; path: string; uploadUrl: string }>;

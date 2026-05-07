@@ -1,5 +1,5 @@
 import { createLocalDbAdapter } from '../adapters/createLocalDbAdapter';
-import { PhotoAsset, CaptureSource } from '../models/media';
+import { PhotoAsset, CaptureSource, PhotoUploadVariant } from '../models/media';
 import { compressImage, createThumbnail } from './imageCompression';
 import { createId } from '../../services/storage';
 import { IndexedDbAdapter } from '../adapters/IndexedDbAdapter';
@@ -104,13 +104,13 @@ export const MediaService = {
     await SyncQueueService.enqueue(params.orgId, {
       type: 'UPLOAD_PHOTO',
       userId: 'system',
-      payload: { photoId, variants: ['full', 'thumb'] }
+      payload: { photoId, variants: ['full', 'thumb'] satisfies PhotoUploadVariant[] }
     });
 
     return asset;
   },
 
-  async getPhotoBlob(photoId: string, variant: 'full' | 'thumb' = 'full'): Promise<Blob | null> {
+  async getPhotoBlob(photoId: string, variant: PhotoUploadVariant = 'full'): Promise<Blob | null> {
     await ensureBlobStore();
     const key = `photo:${photoId}:${variant}`;
 
@@ -206,7 +206,7 @@ export const MediaService = {
     }
   },
 
-  async markVariantUploaded(orgId: string, photoId: string, variant: 'full' | 'thumb', bucket: string, path: string): Promise<void> {
+  async markVariantUploaded(orgId: string, photoId: string, variant: PhotoUploadVariant, bucket: string, path: string): Promise<void> {
     const asset = await this.getPhotoAsset(orgId, photoId);
     if (asset) {
       if (!asset.remote) asset.remote = {};

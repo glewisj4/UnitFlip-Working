@@ -1,11 +1,12 @@
 import { RemotePhotoAdapter } from './RemotePhotoAdapter';
 import { getSupabaseClient } from '../services/supabaseClient';
+import { PhotoUploadVariant } from '../models/media';
 
 export class EdgeFunctionPhotoAdapter implements RemotePhotoAdapter {
   async getSignedUploadUrl(params: {
     orgId: string;
     photoId: string;
-    variant: 'full' | 'thumb';
+    variant: PhotoUploadVariant;
     contentType: string;
     sizeBytes: number;
   }): Promise<{ bucket: string; path: string; uploadUrl: string }> {
