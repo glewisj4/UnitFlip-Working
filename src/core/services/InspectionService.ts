@@ -18,6 +18,11 @@ interface CreateInspectionOptions {
   notes?: string;
 }
 
+const normalizeInspection = (inspection: Inspection): Inspection => ({
+  ...inspection,
+  isInspectionFinalized: Boolean(inspection.isInspectionFinalized),
+});
+
 export const InspectionService = {
   async listInspections(orgId: string, unitId?: string): Promise<Inspection[]> {
     const key = `${STORAGE_KEY_PREFIX}${orgId}`;
@@ -28,7 +33,7 @@ export const InspectionService = {
       filtered = filtered.filter((i) => i.unitId === unitId);
     }
     
-    return filtered.sort((a, b) => b.updatedAt - a.updatedAt);
+    return filtered.map((inspection) => normalizeInspection(inspection)).sort((a, b) => b.updatedAt - a.updatedAt);
   },
 
   async createInspection(
@@ -47,6 +52,7 @@ export const InspectionService = {
       unitId,
       title,
       status: 'draft',
+      isInspectionFinalized: false,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       createdByUserId: userId,
@@ -59,26 +65,27 @@ export const InspectionService = {
       generatedItems: options?.generatedItems || [],
     };
 
-    inspections.push(newInspection);
+    inspections.push(normalizeInspection(newInspection));
     await adapter.setItem(key, inspections);
 
     // Enqueue Sync Op
     await SyncQueueService.enqueue(orgId, {
         type: 'UPSERT_INSPECTION',
         userId,
-        payload: newInspection as unknown as Record<string, unknown>
+        payload: normalizeInspection(newInspection) as unknown as Record<string, unknown>
     });
 
-    return newInspection;
+    return normalizeInspection(newInspection);
   },
 
   async updateInspection(orgId: string, inspection: Inspection, userId: string): Promise<void> {
     const key = `${STORAGE_KEY_PREFIX}${orgId}`;
     const inspections = (await adapter.getItem<Inspection[]>(key)) || [];
     
+    const normalizedInspection = normalizeInspection(inspection);
     const updatedInspections = inspections.map((i) => 
       i.id === inspection.id 
-        ? { ...inspection, updatedAt: Date.now(), lastEditedByUserId: userId } 
+        ? { ...normalizedInspection, updatedAt: Date.now(), lastEditedByUserId: userId }
         : i
     );
     
@@ -88,7 +95,7 @@ export const InspectionService = {
     await SyncQueueService.enqueue(orgId, {
         type: 'UPSERT_INSPECTION',
         userId,
-        payload: inspection as unknown as Record<string, unknown>
+        payload: normalizedInspection as unknown as Record<string, unknown>
     });
   },
 

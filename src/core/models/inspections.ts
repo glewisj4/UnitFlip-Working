@@ -134,6 +134,7 @@ export interface Inspection {
   unitId: string;
   title: string;
   status: InspectionStatus;
+  isInspectionFinalized?: boolean;
   createdAt: number;
   updatedAt: number;
   createdByUserId: string;
