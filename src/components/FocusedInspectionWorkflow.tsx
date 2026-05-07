@@ -29,6 +29,7 @@ import { MaterialRequirementService } from '../core/services/MaterialRequirement
 import { MediaService } from '../core/services/MediaService';
 import { ProductRecommendationService } from '../core/services/ProductRecommendationService';
 import { RepairTaskService } from '../core/services/RepairTaskService';
+import { ReportService } from '../core/services/ReportService';
 import { UnitService } from '../core/services/UnitService';
 
 type FocusedWorkflowIntent = 'inspection' | 'materials';
@@ -112,6 +113,11 @@ const EMPTY_UNIT_DRAFT: UnitDraft = {
   budgetThreshold: '',
   layoutTemplateId: '',
 };
+
+const REPORT_READY_TIMEOUT_MS = 30_000;
+const REPORT_READY_POLL_INTERVAL_MS = 500;
+
+const wait = (durationMs: number) => new Promise((resolve) => window.setTimeout(resolve, durationMs));
 
 const normalizeLabel = (value?: string | null) => (value || '').trim().toLowerCase();
 const titleCase = (value?: string | null) =>
@@ -378,6 +384,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
       ),
     [generatedSections, roomGroups]
   );
+  const isInspectionFinalized = Boolean(inspection?.isInspectionFinalized);
   const canContinueAnyway = role === 'developer' || role === 'admin';
   const filteredUnits = useMemo(() => {
     const query = normalizeLabel(unitSearch);
@@ -825,7 +832,16 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
     await loadInspectionContext(inspection.id, nextStep || step);
   };
 
+  const ensureEditableInspection = (actionLabel: string) => {
+    if (!isInspectionFinalized) return true;
+    const message = `Report already generated. Unlock the inspection before you ${actionLabel}.`;
+    setErrorMessage(message);
+    setGlobalMessage(message);
+    return false;
+  };
+
   const handleActionChange = async (section: GeneratedInspectionSection, item: GeneratedInspectionItem, action: FocusedItemAction) => {
+    if (!ensureEditableInspection('change item decisions')) return;
     if (item.focusedAction === action) return;
     setErrorMessage(null);
     setGlobalMessage(null);
@@ -857,6 +873,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
   };
 
   const handleNoteSave = async (section: GeneratedInspectionSection, item: GeneratedInspectionItem) => {
+    if (!ensureEditableInspection('edit notes')) return;
     if (!org || !user) return;
     const nextNote = noteDrafts[item.id]?.trim() || '';
     try {
@@ -886,6 +903,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
   };
 
   const handlePhotoCapture = async (section: GeneratedInspectionSection, item: GeneratedInspectionItem, file: File) => {
+    if (!ensureEditableInspection('add photos')) return;
     if (!org || !user || !inspection) return;
       setSaveState({ phase: 'saving', message: 'Saving photo on this device…', itemId: item.id });
     try {
@@ -934,6 +952,7 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
   };
 
   const handleAddMaterial = async (section: GeneratedInspectionSection, item: GeneratedInspectionItem) => {
+    if (!ensureEditableInspection('edit materials')) return;
     if (!org || !user || !inspection || !selectedUnit) return;
     const selection = productSelections[item.id];
     const catalogItem = catalogItems.find((entry) => entry.id === selection?.catalogItemId);
@@ -1129,7 +1148,114 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
     }
   };
 
+  const persistInspectionFinalization = async (
+    nextFinalized: boolean,
+    savingMessage: string,
+    savedMessage: string,
+    globalNotice: string,
+    failureMessage: string
+  ) => {
+    if (!org || !user || !inspection) return false;
+    setErrorMessage(null);
+    setSaveState({ phase: 'saving', message: savingMessage });
+    try {
+      const nextInspection: Inspection = {
+        ...inspection,
+        isInspectionFinalized: nextFinalized,
+      };
+      await InspectionService.updateInspection(org.id, nextInspection, user.id);
+      setInspection(nextInspection);
+      setSaveState({ phase: 'saved', message: savedMessage });
+      setGlobalMessage(globalNotice);
+      return true;
+    } catch (error) {
+      setSaveState({ phase: 'failed', message: failureMessage });
+      setErrorMessage(error instanceof Error ? error.message : failureMessage);
+      return false;
+    }
+  };
+
+  const openInspectionReport = async () => {
+    if (!org || !user || !inspection) return;
+    if (incompleteItems.length > 0) {
+      const message = 'Finish the inspection and materials before generating the report.';
+      setErrorMessage(message);
+      setGlobalMessage(message);
+      goToStep('summary');
+      return;
+    }
+
+    setErrorMessage(null);
+    setSaveState({ phase: 'saving', message: 'Generating report on this device...' });
+
+    try {
+      const requestedReport = await ReportService.createReportRequest({
+        orgId: org.id,
+        inspectionId: inspection.id,
+        userId: user.id,
+        options: { includePhotos: true },
+      });
+
+      let readyReport = requestedReport;
+      if (requestedReport.status === 'queued' || requestedReport.status === 'generating') {
+        await triggerSyncNow();
+        const deadline = Date.now() + REPORT_READY_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+          readyReport = (await ReportService.getLatestReport(org.id, inspection.id)) || requestedReport;
+          if (readyReport.status === 'ready' || readyReport.status === 'failed') {
+            break;
+          }
+          await wait(REPORT_READY_POLL_INTERVAL_MS);
+        }
+      }
+
+      if (readyReport.status !== 'ready' || !readyReport.pdf?.url) {
+        throw new Error(
+          readyReport.errorMessage ||
+            'Report generation did not complete. The inspection remains editable so you can retry.'
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Report generation failed.';
+      setSaveState({ phase: 'failed', message: 'Report generation failed.' });
+      setErrorMessage(message);
+      setGlobalMessage('Report generation failed. The inspection is still editable and can be retried.');
+      return;
+    }
+
+    if (!isInspectionFinalized) {
+      await persistInspectionFinalization(
+        true,
+        'Locking inspection after report generation...',
+        'Report generated and inspection locked.',
+        'Report generated. Editing is now locked until you unlock this inspection.',
+        'Report generated, but locking the inspection failed.'
+      );
+      return;
+    }
+
+    setSaveState({ phase: 'saved', message: 'Report generated on this device.' });
+    setGlobalMessage('Report generated. Editing is already locked for this inspection.');
+  };
+
+  const handleUnlockInspectionForEditing = async () => {
+    if (!inspection?.isInspectionFinalized) return;
+    await persistInspectionFinalization(
+      false,
+      'Unlocking inspection for editing on this device...',
+      'Inspection unlocked for editing on this device.',
+      'Inspection unlocked for editing. Generate the report again when you are ready to hand off the package.',
+      'Failed to unlock the inspection for editing.'
+    );
+  };
   const handleSubmitMaterials = async () => {
+    if (!isInspectionFinalized) {
+      const message = 'Generate the report before sending materials to procurement.';
+      setErrorMessage(message);
+      setGlobalMessage(message);
+      return;
+    }
+
     if (incompleteItems.length > 0) {
       setGlobalMessage('Review the highlighted missing items before submitting materials.');
       goToStep('summary');
@@ -1415,6 +1541,20 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
         </div>
       ) : null}
       {globalMessage ? <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{globalMessage}</div> : null}
+      {isInspectionFinalized ? (
+        <div data-testid="focused-finalization-lock-banner" className="rounded-2xl border border-slate-200 bg-slate-950 px-4 py-4 text-white shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Report Generated</div>
+              <div className="mt-1 text-base font-semibold">Editing is locked for this inspection.</div>
+              <div className="mt-1 text-sm text-slate-300">Unlock this inspection before changing decisions, notes, photos, or materials.</div>
+            </div>
+            <button type="button" onClick={() => void handleUnlockInspectionForEditing()} className="rounded-2xl border border-white/20 bg-white px-4 py-2 text-sm font-semibold text-slate-900">
+              Edit Inspection
+            </button>
+          </div>
+        </div>
+      ) : null}
       {errorMessage ? (
         <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           <AlertCircle size={16} className="mt-0.5 shrink-0" />
@@ -1657,9 +1797,15 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
           <button type="button" onClick={() => goToStep('inspection')} className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700">
             Back to Inspection
           </button>
-          <button type="button" onClick={() => goToStep('materials')} className="rounded-2xl bg-lowes-blue px-4 py-2 text-sm font-semibold text-white">
-            View Materials
-          </button>
+          {incompleteItems.length === 0 ? (
+            <button type="button" onClick={() => void openInspectionReport()} className="rounded-2xl bg-lowes-blue px-4 py-2 text-sm font-semibold text-white">
+              Generate Report
+            </button>
+          ) : (
+            <button type="button" onClick={() => goToStep('materials')} className="rounded-2xl bg-lowes-blue px-4 py-2 text-sm font-semibold text-white">
+              View Materials
+            </button>
+          )}
         </div>
       </div>
 
@@ -1850,6 +1996,20 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
         </div>
       ) : null}
       {globalMessage ? <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{globalMessage}</div> : null}
+      {isInspectionFinalized ? (
+        <div data-testid="focused-finalization-lock-banner" className="rounded-2xl border border-slate-200 bg-slate-950 px-4 py-4 text-white shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Report Generated</div>
+              <div className="mt-1 text-base font-semibold">Editing is locked for this inspection.</div>
+              <div className="mt-1 text-sm text-slate-300">Unlock this inspection before changing decisions, notes, photos, or materials.</div>
+            </div>
+            <button type="button" onClick={() => void handleUnlockInspectionForEditing()} className="rounded-2xl border border-white/20 bg-white px-4 py-2 text-sm font-semibold text-slate-900">
+              Edit Inspection
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div
         data-testid="focused-sync-status"
         className={`rounded-2xl border px-4 py-3 text-sm ${
@@ -2012,10 +2172,17 @@ export const FocusedInspectionWorkflow: React.FC<FocusedInspectionWorkflowProps>
           <button type="button" onClick={onExit} className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-medium text-white">
             Save for Later
           </button>
-          <button type="button" onClick={() => void handleSubmitMaterials()} className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900">
-            <PackageCheck size={16} />
-            Submit to Procurement
-          </button>
+          {!isInspectionFinalized ? (
+            <button type="button" onClick={() => void openInspectionReport()} className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900">
+              <PackageCheck size={16} />
+              Generate Report
+            </button>
+          ) : (
+            <button type="button" onClick={() => void handleSubmitMaterials()} className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900">
+              <PackageCheck size={16} />
+              Submit to Procurement
+            </button>
+          )}
         </div>
       </div>
     </section>
