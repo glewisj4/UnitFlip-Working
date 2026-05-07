@@ -42,8 +42,8 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
     setFailures(result.failedRows);
     setMessage(
       result.failedRows.length > 0
-        ? `Imported ${result.importedCount} products with ${result.failedRows.length} validation issue(s).`
-        : `Imported ${result.importedCount} products.`,
+        ? `Imported ${result.importedCount} products. Preserved ${result.preservedProvidedCategoryCount} explicit categories, auto-assigned ${result.autoAssignedCount}, and flagged ${result.needsReviewCount} for review with ${result.failedRows.length} validation issue(s).`
+        : `Imported ${result.importedCount} products. Preserved ${result.preservedProvidedCategoryCount} explicit categories, auto-assigned ${result.autoAssignedCount}, and flagged ${result.needsReviewCount} for review.`,
     );
     onImportComplete();
   };
@@ -81,7 +81,7 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
           <div>
             <h2 className="text-xl font-bold text-slate-900">Catalog Import</h2>
             <p className="text-sm text-slate-500">
-              Use CSV, pasted quote-friendly text, or a quick placeholder without creating a second catalog path.
+              Use the Lowe&apos;s archetype CSV, pasted quote-friendly text, or a quick placeholder without creating a second catalog path.
             </p>
           </div>
           <button onClick={onClose} className="rounded-full p-2 hover:bg-slate-100">
@@ -99,6 +99,7 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
               <button
                 key={value}
                 onClick={() => setMode(value as ImportMode)}
+                data-testid={`catalog-import-mode-${value}`}
                 className={`rounded-xl px-4 py-2 text-sm font-semibold ${
                   mode === value ? 'bg-lowes-blue text-white' : 'border border-slate-200 bg-white text-slate-700'
                 }`}
@@ -110,6 +111,11 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
 
           {mode === 'csv' ? (
             <div className="space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                The downloadable CSV is set up for manual Lowe&apos;s sourcing: pick one product per tier, keep the
+                archetype id stable, and leave category blank when you want auto-category assignment plus review flags
+                to do the first pass.
+              </div>
               <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
@@ -118,7 +124,7 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
                     const url = URL.createObjectURL(blob);
                     const anchor = document.createElement('a');
                     anchor.href = url;
-                    anchor.download = 'unitflip-catalog-template.csv';
+                    anchor.download = 'unitflip-manual-lowes-template.csv';
                     anchor.click();
                     URL.revokeObjectURL(url);
                   }}
@@ -134,12 +140,27 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
                 </label>
               </div>
               <textarea
+                data-testid="catalog-import-csv-input"
                 rows={12}
                 value={csvText}
                 onChange={(event) => setCsvText(event.target.value)}
                 className={`${inputClass} resize-none font-mono text-xs`}
                 placeholder="Paste CSV rows here"
               />
+              <div className="grid gap-3 text-xs text-slate-500 sm:grid-cols-3">
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="font-semibold text-slate-700">Archetype bridge</div>
+                  <div className="mt-1">Use `archetype_id` to map imported products back to inspection needs.</div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="font-semibold text-slate-700">Assignment hints</div>
+                  <div className="mt-1">`category_hint`, `keyword_hints`, and `lowes_category_hint` feed the existing review pipeline.</div>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="font-semibold text-slate-700">Tier sanity</div>
+                  <div className="mt-1">Keep budget, standard, and premium rows distinct with rising price and no duplicate product picks.</div>
+                </div>
+              </div>
             </div>
           ) : null}
 
@@ -150,8 +171,12 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
                 <div className="mt-2 font-mono text-xs text-slate-700">
                   name | vendor | sku | Top-level &gt; Subcategory | equivalentGroup | tag1;tag2 | price
                 </div>
+                <div className="mt-2 text-xs text-slate-500">
+                  Missing or weak categories are auto-assigned deterministically. Low-confidence matches are imported into a reviewable category instead of being silently guessed.
+                </div>
               </div>
               <textarea
+                data-testid="catalog-import-paste-input"
                 rows={12}
                 value={pasteText}
                 onChange={(event) => setPasteText(event.target.value)}
@@ -164,9 +189,10 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
           {mode === 'quick_add' ? (
             <div className="space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                Quick add is for rough placeholders that you normalize later.
+                Quick add is for rough placeholders that you normalize later. If category hints are weak, the product is still imported with a review flag instead of being left unusable.
               </div>
               <input
+                data-testid="catalog-import-quick-add-input"
                 value={quickAddValue}
                 onChange={(event) => setQuickAddValue(event.target.value)}
                 className={inputClass}
@@ -177,6 +203,7 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
 
           {message ? (
             <div
+              data-testid="catalog-import-status"
               className={`rounded-2xl border px-4 py-3 text-sm ${
                 status === 'failed'
                   ? 'border-amber-200 bg-amber-50 text-amber-900'
@@ -209,6 +236,7 @@ export const CatalogImportModal: React.FC<CatalogImportModalProps> = ({
             </button>
             <button
               onClick={() => void handleImport()}
+              data-testid="catalog-import-submit"
               disabled={
                 status === 'working' ||
                 (mode === 'csv' ? !csvText.trim() : mode === 'paste' ? !pasteText.trim() : !quickAddValue.trim())

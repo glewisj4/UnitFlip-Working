@@ -119,9 +119,29 @@ export class CatalogService {
     }
 
     const nextTitle = (updates.title || updates.name || items[index].title || items[index].name || '').trim();
+    const categoryChanged =
+      updates.categoryId !== undefined &&
+      updates.categoryId !== items[index].categoryId;
     const updatedItem = this.normalizeItem({
       ...items[index],
       ...updates,
+      categoryAssignment: categoryChanged
+        ? {
+            ...(items[index].categoryAssignment || {
+              assignmentMethod: 'manual_review',
+              confidence: 1,
+              matchedSignals: [],
+              needsReview: false,
+            }),
+            assignedCategoryId: updates.categoryId,
+            assignmentMethod: 'manual_review',
+            confidence: 1,
+            matchedSignals: ['Category updated manually in catalog review.'],
+            needsReview: false,
+            reviewedAt: new Date().toISOString(),
+            reviewedBy: updates.updatedBy || 'system',
+          }
+        : updates.categoryAssignment || items[index].categoryAssignment,
       title: nextTitle,
       name: nextTitle,
       normalizedTitle: normalizeTitle(nextTitle),
@@ -212,8 +232,37 @@ export class CatalogService {
       topLevelCategory: item.topLevelCategory || item.categoryName || item.category,
       subcategory: item.subcategory || undefined,
       equivalentGroup: item.equivalentGroup || undefined,
+      archetypeId: item.archetypeId || item.equivalentGroup || undefined,
       vendor: item.vendor || item.options?.[0]?.brand || item.brand || undefined,
       importSource: item.importSource || 'manual',
+      sourceRef: item.sourceRef || item.options?.[0]?.url || undefined,
+      imageUrl: item.imageUrl || item.options?.[0]?.imageUrl || undefined,
+      keywordHints: Array.isArray(item.keywordHints) ? item.keywordHints : [],
+      lowesCategoryHint: item.lowesCategoryHint || undefined,
+      sourceConfidence:
+        item.sourceConfidence === 'high' || item.sourceConfidence === 'medium' || item.sourceConfidence === 'low'
+          ? item.sourceConfidence
+          : undefined,
+      lastReviewedAt: item.lastReviewedAt || undefined,
+      packSize:
+        typeof item.packSize === 'number'
+          ? item.packSize
+          : typeof item.options?.[0]?.packSize === 'number'
+            ? item.options?.[0]?.packSize
+            : undefined,
+      coverage: item.coverage || item.options?.[0]?.coverage || undefined,
+      categoryAssignment: item.categoryAssignment
+        ? {
+            ...item.categoryAssignment,
+            assignedCategoryId: item.categoryAssignment.assignedCategoryId || item.categoryId,
+            confidence:
+              typeof item.categoryAssignment.confidence === 'number' ? item.categoryAssignment.confidence : 0,
+            matchedSignals: Array.isArray(item.categoryAssignment.matchedSignals)
+              ? item.categoryAssignment.matchedSignals
+              : [],
+            needsReview: Boolean(item.categoryAssignment.needsReview),
+          }
+        : undefined,
       options: Array.isArray(item.options) ? item.options : [],
       defaultQty: item.defaultQty || 1,
       unit: item.unit || 'ea',

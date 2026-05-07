@@ -36,6 +36,8 @@ export interface ProductOption {
   description?: string;
   brand?: string;
   modelNumber?: string;
+  packSize?: number;
+  coverage?: string;
 }
 
 export interface Category {
@@ -113,7 +115,7 @@ export interface CatalogItem {
   archetypeId?: string;
   functionalTags?: string[];
   vendor?: string;
-  importSource?: 'manual' | 'csv' | 'text_paste' | 'quote_pdf' | 'quick_add';
+  importSource?: 'manual' | 'csv' | 'text_paste' | 'quote_pdf' | 'quick_add' | 'manual_lowes';
 
   defaultPrice?: number;
   priceSource?: string;
@@ -134,7 +136,12 @@ export interface CatalogItem {
 
   lastVerifiedAt?: string;
   notes?: string;
+  keywordHints?: string[];
+  lowesCategoryHint?: string;
   sourceConfidence?: CatalogSourceConfidence;
+  lastReviewedAt?: string;
+  packSize?: number;
+  coverage?: string;
 
   // Legacy fields for backward compatibility
   defaultQty?: number;
