@@ -48,11 +48,48 @@ export interface Category {
   isActive?: boolean;
   createdAt: string | number;
   updatedAt: string | number;
+  aliases?: string[];
+  keywordHints?: string[];
+  lowesCategoryHints?: string[];
 
   // Legacy fields for backward compatibility during migration
   parentCategoryId?: string | null;
   color?: string;
   icon?: string;
+}
+
+export type CatalogCategoryAssignmentMethod =
+  | 'provided_exact'
+  | 'provided_alias'
+  | 'org_memory'
+  | 'keyword_heuristic'
+  | 'fallback_uncategorized'
+  | 'manual_review';
+
+export interface CatalogCategoryAssignment {
+  assignedCategoryId?: string;
+  assignmentMethod: CatalogCategoryAssignmentMethod;
+  confidence: number;
+  matchedSignals: string[];
+  needsReview: boolean;
+  sourceCategoryPath?: string;
+  sourceTitleFingerprint?: string;
+  sourceHintLabel?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+}
+
+export interface CatalogCategoryCorrectionMemory {
+  id: string;
+  orgId: string;
+  matchType: 'category_path' | 'title_fingerprint';
+  matchValue: string;
+  categoryId: string;
+  categoryName?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+  notes?: string;
 }
 
 export interface CatalogItem {
