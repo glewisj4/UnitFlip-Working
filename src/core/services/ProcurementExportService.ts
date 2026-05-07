@@ -24,6 +24,67 @@ const summarizeBundleOpportunity = (item: ProcurementDraftItem): string =>
     ? `${item.vendorIntelligence.bundleSuggestion.triggerName} (${item.vendorIntelligence.bundleSuggestion.companionCount} companions)`
     : '';
 
+const summarizeDraftBundles = (draft: ProcurementDraft): string =>
+  (draft.bundleSuggestions || []).map((bundle) => bundle.label).join('; ');
+
+const summarizeItemBundles = (item: ProcurementDraftItem): string =>
+  (item.bundleIds || []).join('; ');
+
+const summarizeDraftBundleProductRecommendations = (draft: ProcurementDraft): string =>
+  (draft.bundleProductRecommendations || [])
+    .map((recommendation) =>
+      recommendation.status === 'resolved'
+        ? `${recommendation.bundleLabel}: ${recommendation.recommendedProductLabel}`
+        : `${recommendation.bundleLabel}: manual review`
+    )
+    .join('; ');
+
+const summarizeDraftRecommendationAttachments = (draft: ProcurementDraft): string =>
+  (draft.recommendationAttachments || [])
+    .map((attachment) => `${attachment.bundleId}:${attachment.attachmentState}`)
+    .join('; ');
+
+const summarizeDraftPromotedLines = (draft: ProcurementDraft): string =>
+  (draft.promotedLines || [])
+    .map((line) => `${line.label}:${line.optionId || 'default'}:${line.quantity ?? 'manual'}`)
+    .join('; ');
+
+const getItemBundleProductRecommendations = (draft: ProcurementDraft, item: ProcurementDraftItem) =>
+  (draft.bundleProductRecommendations || []).filter((recommendation) =>
+    (item.bundleIds || []).includes(recommendation.bundleId)
+  );
+
+const getItemRecommendationAttachments = (draft: ProcurementDraft, item: ProcurementDraftItem) =>
+  (draft.recommendationAttachments || []).filter((attachment) =>
+    (item.bundleIds || []).includes(attachment.bundleId)
+  );
+
+const summarizeItemBundleProductIds = (draft: ProcurementDraft, item: ProcurementDraftItem): string =>
+  getItemBundleProductRecommendations(draft, item)
+    .map((recommendation) => recommendation.recommendedProductId || '')
+    .filter(Boolean)
+    .join('; ');
+
+const summarizeItemBundleProductLabels = (draft: ProcurementDraft, item: ProcurementDraftItem): string =>
+  getItemBundleProductRecommendations(draft, item)
+    .map((recommendation) =>
+      recommendation.status === 'resolved'
+        ? `${recommendation.recommendedProductLabel} x ${recommendation.quantity ?? 'manual'}`
+        : `${recommendation.bundleLineLabel} (manual)`
+    )
+    .join('; ');
+
+const summarizeItemAttachmentStates = (draft: ProcurementDraft, item: ProcurementDraftItem): string =>
+  getItemRecommendationAttachments(draft, item)
+    .map((attachment) => `${attachment.productLabel || attachment.bundleLineId}:${attachment.attachmentState}`)
+    .join('; ');
+
+const summarizeItemPromotedLines = (draft: ProcurementDraft, item: ProcurementDraftItem): string =>
+  (draft.promotedLines || [])
+    .filter((line) => (item.bundleIds || []).includes(line.bundleId))
+    .map((line) => `${line.label} • ${line.skuCode || line.optionId || 'default'}`)
+    .join('; ');
+
 const slugify = (value: string): string =>
   value
     .toLowerCase()
@@ -38,6 +99,10 @@ export const ProcurementExportService = {
       'Draft Name',
       'Draft Status',
       'Draft Updated At',
+      'Draft Bundle Suggestions',
+      'Draft Product Recommendations',
+      'Draft Recommendation Attachments',
+      'Draft Promoted Lines',
       'Item ID',
       'Material Requirement ID',
       'Inspection ID',
@@ -70,6 +135,11 @@ export const ProcurementExportService = {
       'Cheaper Alternative Option',
       'Cheaper Alternative Price',
       'Bundle Opportunity',
+      'Item Bundle IDs',
+      'Item Bundle Product IDs',
+      'Item Bundle Product Labels',
+      'Item Attachment States',
+      'Item Promoted Lines',
       'Vendor Risk Flags',
       'Vendor Review Needed',
     ];
@@ -79,6 +149,10 @@ export const ProcurementExportService = {
       draft.name,
       draft.status,
       new Date(draft.updatedAt).toISOString(),
+      summarizeDraftBundles(draft),
+      summarizeDraftBundleProductRecommendations(draft),
+      summarizeDraftRecommendationAttachments(draft),
+      summarizeDraftPromotedLines(draft),
       item.id,
       item.materialRequirementId,
       item.inspectionId,
@@ -111,6 +185,11 @@ export const ProcurementExportService = {
       item.vendorIntelligence?.cheapestAlternative?.optionName || '',
       item.vendorIntelligence?.cheapestAlternative?.price ?? '',
       summarizeBundleOpportunity(item),
+      summarizeItemBundles(item),
+      summarizeItemBundleProductIds(draft, item),
+      summarizeItemBundleProductLabels(draft, item),
+      summarizeItemAttachmentStates(draft, item),
+      summarizeItemPromotedLines(draft, item),
       summarizeVendorSignals(item),
       item.vendorIntelligence?.reviewNeeded ?? '',
     ]);

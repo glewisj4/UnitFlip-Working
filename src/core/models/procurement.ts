@@ -6,7 +6,6 @@ export type ProcurementDraftStatus =
   | 'fulfilled'
   | 'canceled';
 
-export type MatchConfidenceBand = 'exact' | 'close' | 'loose' | 'manual';
 export type ProcurementBundleId =
   | 'paint-turnover'
   | 'blinds-replacement'
@@ -21,6 +20,12 @@ export type ProcurementProductResolutionMethod =
   | 'alias'
   | 'fallback_category'
   | 'manual_needed';
+export type ProcurementDraftRecommendationAttachmentState =
+  | 'recommended'
+  | 'attached'
+  | 'manual_needed';
+
+export type MatchConfidenceBand = 'exact' | 'close' | 'loose' | 'manual';
 export type ProcurementOptimizationSignal =
   | 'better_pack_size_available'
   | 'combine_with_other_units'
@@ -139,13 +144,6 @@ export interface ProcurementVendorIntelligence {
   reviewNeeded: boolean;
 }
 
-export interface ProcurementReviewGuidance {
-  code: ProcurementReviewGuidanceCode;
-  title: string;
-  detail: string;
-  source: 'match' | 'vendor' | 'optimization';
-}
-
 export interface ProcurementBundleLine {
   id: string;
   category: string;
@@ -229,6 +227,55 @@ export interface ResolvedProcurementProductRecommendation {
   rationale: string[];
 }
 
+export interface ProcurementDraftRecommendationAttachment {
+  id: string;
+  draftId: string;
+  recommendationId: string;
+  bundleId: ProcurementBundleId;
+  bundleLineId: string;
+  productId: string | null;
+  productLabel: string | null;
+  quantity: number | null;
+  unit?: string;
+  attachmentState: ProcurementDraftRecommendationAttachmentState;
+  sourceRequirementIds?: string[];
+  sourceGeneratedItemIds?: string[];
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProcurementDraftPromotedLine {
+  id: string;
+  draftId: string;
+  recommendationId: string;
+  bundleId: ProcurementBundleId;
+  bundleLineId: string;
+  productId: string | null;
+  optionId?: string | null;
+  vendorId?: string | null;
+  skuCode?: string | null;
+  label: string;
+  quantity: number | null;
+  unit?: string;
+  estimatedUnitPrice?: number | null;
+  estimatedLineCost?: number | null;
+  optimization?: ProcurementOptimization;
+  sourceRequirementIds: string[];
+  sourceGeneratedItemIds: string[];
+  notes?: string;
+  promotionState: 'draft_line';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProcurementReviewGuidance {
+  code: ProcurementReviewGuidanceCode;
+  title: string;
+  detail: string;
+  source: 'match' | 'vendor' | 'optimization';
+}
+
 export interface ProcurementDraftItem {
   id: string;
   materialRequirementId: string;
@@ -247,6 +294,7 @@ export interface ProcurementDraftItem {
   optimization?: ProcurementOptimization;
   vendorIntelligence?: ProcurementVendorIntelligence;
   reviewGuidance?: ProcurementReviewGuidance[];
+  bundleIds?: ProcurementBundleId[];
 }
 
 export interface ProcurementDraft {
@@ -257,6 +305,10 @@ export interface ProcurementDraft {
   itemCount: number;
   sourceRequirementIds: string[];
   items: ProcurementDraftItem[];
+  bundleSuggestions?: ResolvedProcurementBundle[];
+  bundleProductRecommendations?: ResolvedProcurementProductRecommendation[];
+  recommendationAttachments?: ProcurementDraftRecommendationAttachment[];
+  promotedLines?: ProcurementDraftPromotedLine[];
   createdAt: number;
   updatedAt: number;
   intelligenceRefreshedAt?: number;
