@@ -9,6 +9,7 @@ import { SyncQueueService } from './SyncQueueService';
 import { AuditLogService } from './AuditLogService';
 import { Role } from '../models/auth';
 import { createId } from '../../services/storage';
+import { AuthPolicyService } from './AuthPolicyService';
 
 const PENDING_PURGE_KEY_PREFIX = 'unitflip_pending_purge_v1:';
 const adapter = createLocalDbAdapter();
@@ -24,7 +25,7 @@ export const RetentionService = {
   },
 
   async updatePolicy(params: { orgId: string; userId: string; role: Role; patch: Partial<RetentionPolicy> }): Promise<void> {
-    if (params.role !== 'admin') throw new Error('Unauthorized');
+    if (!AuthPolicyService.canManageRetention(params.role)) throw new Error('Unauthorized');
     
     const currentSettings = await OrgSettingsService.getSettings(params.orgId);
     await OrgSettingsService.updateSettings(params.orgId, {
@@ -106,7 +107,7 @@ export const RetentionService = {
   },
 
   async approvePurge(params: { orgId: string; userId: string; role: Role; pendingId: string }): Promise<void> {
-    if (params.role !== 'admin') throw new Error('Unauthorized');
+    if (!AuthPolicyService.canManageRetention(params.role)) throw new Error('Unauthorized');
     
     const pendingKey = `${PENDING_PURGE_KEY_PREFIX}${params.orgId}`;
     const items = (await adapter.getItem<PendingPurgeItem[]>(pendingKey)) || [];
@@ -182,6 +183,7 @@ export const RetentionService = {
   },
 
   async executePurge(params: { orgId: string; userId: string; role: Role; pendingId: string; force?: boolean }): Promise<void> {
+    if (!AuthPolicyService.canManageRetention(params.role)) throw new Error('Unauthorized');
     const policy = await this.getPolicy(params.orgId);
     const pendingKey = `${PENDING_PURGE_KEY_PREFIX}${params.orgId}`;
     const items = (await adapter.getItem<PendingPurgeItem[]>(pendingKey)) || [];

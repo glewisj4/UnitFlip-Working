@@ -66,7 +66,56 @@ const VIEW_PERMISSION_MAP: Record<AppView, Permission> = {
   'feedback-management': 'feedback_management:view',
 };
 
+const ROLE_RANK: Record<Role, number> = {
+  vendor: 0,
+  manager: 1,
+  admin: 2,
+  developer: 3,
+};
+
 export const AuthPolicyService = {
+  normalizeRole(role: Role | null | undefined): Role | null {
+    if (!role) return null;
+    return role in ROLE_RANK ? role : null;
+  },
+
+  hasRoleAtLeast(role: Role | null | undefined, minimumRole: Role): boolean {
+    const normalizedRole = this.normalizeRole(role);
+    if (!normalizedRole) return false;
+    return ROLE_RANK[normalizedRole] >= ROLE_RANK[minimumRole];
+  },
+
+  isDeveloper(role: Role | null | undefined): boolean {
+    return this.normalizeRole(role) === 'developer';
+  },
+
+  isAdminOrHigher(role: Role | null | undefined): boolean {
+    return this.hasRoleAtLeast(role, 'admin');
+  },
+
+  canUseDeveloperTools(role: Role | null | undefined, permissions: Permission[] | null | undefined): boolean {
+    return this.isDeveloper(role) && this.hasPermission(permissions, 'developer_tools:view');
+  },
+
+  canAccessAdminSettings(role: Role | null | undefined, permissions: Permission[] | null | undefined): boolean {
+    return this.isAdminOrHigher(role) && this.hasPermission(permissions, 'admin:view');
+  },
+
+  canManageTemplates(role: Role | null | undefined, permissions: Permission[] | null | undefined): boolean {
+    return this.isAdminOrHigher(role) && this.hasPermission(permissions, 'templates:view');
+  },
+
+  canManageCatalog(role: Role | null | undefined, permissions: Permission[] | null | undefined): boolean {
+    return this.isAdminOrHigher(role) && this.hasPermission(permissions, 'catalog:view');
+  },
+
+  canManageShareLinks(role: Role | null | undefined): boolean {
+    return this.isAdminOrHigher(role);
+  },
+
+  canManageRetention(role: Role | null | undefined): boolean {
+    return this.isAdminOrHigher(role);
+  },
   getPermissionsForRole(role: Role): Permission[] {
     return [...ROLE_PERMISSION_MAP[role]];
   },

@@ -6,6 +6,7 @@ import { AuditLogService } from './AuditLogService';
 import { SyncQueueService } from './SyncQueueService';
 import { Role } from '../models/auth';
 import { createId } from '../../services/storage';
+import { AuthPolicyService } from './AuthPolicyService';
 
 const ARCHIVE_KEY_PREFIX = 'unitflip_archives_v1:';
 const BLOB_STORE_NAME = 'blobs';
@@ -31,7 +32,7 @@ export const ArchiveService = {
     photoId: string; 
     variant?: 'full' | 'thumb' 
   }): Promise<ArchiveJob> {
-    if (params.role !== 'admin') throw new Error('Unauthorized');
+    if (!AuthPolicyService.canManageRetention(params.role)) throw new Error('Unauthorized');
 
     const job: ArchiveJob = {
       id: createId(),

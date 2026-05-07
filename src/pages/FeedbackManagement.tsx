@@ -15,6 +15,7 @@ import {
 import { useAppContext } from '../core/hooks/useAppContext';
 import { ClientLogEntry, ClientLogLevel, ClientLoggerService } from '../core/services/ClientLoggerService';
 import { DevSeedService, SeedSummary } from '../core/services/DevSeedService';
+import { AuthPolicyService } from '../core/services/AuthPolicyService';
 import {
   DerivedSignal,
   SignalAnalysisService,
@@ -158,7 +159,7 @@ export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }
   };
 
   const loadSeedStatus = async () => {
-    if (!org || role !== 'developer') {
+    if (!org || !AuthPolicyService.isDeveloper(role)) {
       setHasSeedData(false);
       setSeedSummary(null);
       return;
@@ -175,7 +176,7 @@ export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }
   }, [org, role]);
 
   useEffect(() => {
-    if (!org || role !== 'developer') return;
+    if (!org || !AuthPolicyService.isDeveloper(role)) return;
 
     const handleSeedRefresh = (event: Event) => {
       const detail = (event as CustomEvent<{ orgId?: string; summary?: SeedSummary }>).detail;
@@ -399,7 +400,7 @@ export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }
   };
 
   const handleSeedDemoData = async () => {
-    if (!org || !user || role !== 'developer') return;
+    if (!org || !user || !AuthPolicyService.isDeveloper(role)) return;
 
     const confirmed = window.confirm(
       'Seed a fictional demo portfolio? Existing demo data will be replaced. Non-seeded records will remain untouched.'
@@ -424,7 +425,7 @@ export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }
   };
 
   const handleClearSeedData = async () => {
-    if (!org || !user || role !== 'developer') return;
+    if (!org || !user || !AuthPolicyService.isDeveloper(role)) return;
 
     const confirmed = window.confirm(
       'Clear only demo data marked for this developer seed batch? Real user-created records will remain untouched.'
@@ -589,7 +590,7 @@ export const FeedbackManagement: React.FC<FeedbackManagementProps> = ({ onBack }
         </div>
       </section>
 
-      {role === 'developer' ? (
+      {AuthPolicyService.isDeveloper(role) ? (
         <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="max-w-2xl">
