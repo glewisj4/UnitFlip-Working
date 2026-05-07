@@ -8,13 +8,15 @@ import { RetentionPolicy, PendingPurgeItem } from '../core/models/retention';
 import { ArchiveJob } from '../core/models/archive';
 import { AuditEvent } from '../core/models/audit';
 import { useAppContext } from '../core/hooks/useAppContext';
+import { AuthPolicyService } from '../core/services/AuthPolicyService';
+import { FeatureFlagKey } from '../core/models/auth';
 
 interface AdminRetentionPanelProps {
   onOpenFeedbackManagement?: () => void;
 }
 
 export const AdminRetentionPanel: React.FC<AdminRetentionPanelProps> = ({ onOpenFeedbackManagement }) => {
-  const { org, user, role } = useAppContext();
+  const { org, user, role, permissions, flags, setFlag } = useAppContext();
   const [policy, setPolicy] = useState<RetentionPolicy | null>(null);
   const [pending, setPending] = useState<PendingPurgeItem[]>([]);
   const [archives, setArchives] = useState<Record<string, ArchiveJob[]>>({});
@@ -24,17 +26,62 @@ export const AdminRetentionPanel: React.FC<AdminRetentionPanelProps> = ({ onOpen
   const [exportingIds, setExportingIds] = useState<Set<string>>(new Set());
   const [selectedVariants, setSelectedVariants] = useState<Record<string, 'full' | 'thumb'>>({});
   const [previews, setPreviews] = useState<Record<string, string>>({});
-  const isAdmin = role === 'admin';
-  const isDeveloper = role === 'developer';
+  const [updatingFlags, setUpdatingFlags] = useState<Record<FeatureFlagKey, boolean>>({
+    public_share_links: false,
+    pdf_reports: false,
+    ai_photo_analysis: false,
+    offline_mode: false,
+    advanced_audit_logs: false,
+    remote_uploads: false,
+  });
+  const canManageRetention = AuthPolicyService.canManageRetention(role);
+  const canUseDeveloperTools = AuthPolicyService.canUseDeveloperTools(role, permissions);
+
+  const featureFlagDefinitions: Array<{
+    key: FeatureFlagKey;
+    label: string;
+    description: string;
+  }> = [
+    {
+      key: 'pdf_reports',
+      label: 'PDF Reports',
+      description: 'Shows the report handoff action in Inspection Detail and enables report generation requests.',
+    },
+    {
+      key: 'public_share_links',
+      label: 'Public Share Links',
+      description: 'Allows generated reports to be shared through expiring public URLs.',
+    },
+    {
+      key: 'remote_uploads',
+      label: 'Remote Uploads',
+      description: 'Sends inspection photo variants to Supabase storage when edge functions are enabled.',
+    },
+    {
+      key: 'ai_photo_analysis',
+      label: 'AI Photo Analysis',
+      description: 'Keeps the photo-analysis feature flag visible for controlled enablement.',
+    },
+    {
+      key: 'advanced_audit_logs',
+      label: 'Advanced Audit Logs',
+      description: 'Expands deeper audit instrumentation for admin review and troubleshooting.',
+    },
+    {
+      key: 'offline_mode',
+      label: 'Offline Mode',
+      description: 'Preserves the offline-first workflow. This should normally stay enabled.',
+    },
+  ];
 
   useEffect(() => {
-    if (org && isAdmin) {
+    if (org && canManageRetention) {
       loadData();
     }
     return () => {
       Object.values(previews).forEach(url => URL.revokeObjectURL(url as string));
     };
-  }, [org, isAdmin]);
+  }, [org, canManageRetention]);
 
   const loadData = async () => {
     if (!org) return;
@@ -88,6 +135,18 @@ export const AdminRetentionPanel: React.FC<AdminRetentionPanelProps> = ({ onOpen
       await loadData();
     } catch (error) {
       alert('Failed to update policy');
+    }
+  };
+
+  const handleToggleFlag = async (key: FeatureFlagKey, value: boolean) => {
+    setUpdatingFlags((current) => ({ ...current, [key]: true }));
+    try {
+      await setFlag(key, value);
+    } catch (error) {
+      console.error('Failed to update feature flag', error);
+      alert('Failed to update feature flag');
+    } finally {
+      setUpdatingFlags((current) => ({ ...current, [key]: false }));
     }
   };
 
@@ -180,58 +239,12 @@ export const AdminRetentionPanel: React.FC<AdminRetentionPanelProps> = ({ onOpen
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  if (!isAdmin && !isDeveloper) {
+  if (!canManageRetention && !canUseDeveloperTools) {
     return (
       <div className="p-8 text-center">
         <Shield size={48} className="mx-auto text-slate-300 mb-4" />
         <h2 className="text-xl font-bold text-slate-800">Admin Access Required</h2>
         <p className="text-slate-500">You do not have permission to view this panel.</p>
-      </div>
-    );
-  }
-
-  if (isDeveloper) {
-    return (
-      <div className="max-w-4xl mx-auto p-6 space-y-6">
-        <header className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Developer Tools</p>
-              <h1 className="mt-1 text-2xl font-bold text-slate-900">Retention &amp; Settings</h1>
-              <p className="mt-2 max-w-2xl text-sm text-slate-600">
-                Developer-only observability tools live here. Retention controls remain admin-scoped and are not exposed in this role.
-              </p>
-            </div>
-            {onOpenFeedbackManagement ? (
-              <button
-                type="button"
-                onClick={onOpenFeedbackManagement}
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
-              >
-                Open Feedback Management
-              </button>
-            ) : null}
-          </div>
-        </header>
-
-        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-3">
-            <Shield size={18} className="text-slate-500" />
-            <h2 className="text-lg font-semibold text-slate-900">Feedback Management</h2>
-          </div>
-          <p className="mt-2 text-sm text-slate-600">
-            Review saved feedback, explore recent client logs, and inspect grouped issue signals without mutating any stored records.
-          </p>
-          {onOpenFeedbackManagement ? (
-            <button
-              type="button"
-              onClick={onOpenFeedbackManagement}
-              className="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700"
-            >
-              Open Console
-            </button>
-          ) : null}
-        </section>
       </div>
     );
   }
@@ -246,6 +259,28 @@ export const AdminRetentionPanel: React.FC<AdminRetentionPanelProps> = ({ onOpen
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-8">
+      {canUseDeveloperTools ? (
+        <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Developer Tools</p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-900">Feedback Management</h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Developer access includes the full admin retention surface plus internal observability tools.
+              </p>
+            </div>
+            {onOpenFeedbackManagement ? (
+              <button
+                type="button"
+                onClick={onOpenFeedbackManagement}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+              >
+                Open Feedback Management
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Data Retention</h1>
@@ -304,6 +339,57 @@ export const AdminRetentionPanel: React.FC<AdminRetentionPanelProps> = ({ onOpen
           <p className="text-xs text-slate-400 mt-2">Days pending before auto-purge (if enabled).</p>
         </div>
       </div>
+
+      {flags ? (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-4 border-b border-slate-200 bg-slate-50">
+            <h3 className="font-bold text-slate-800">Operational Feature Flags</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              These flags apply to the current organization only. Use them to expose beta features like report handoff and public share links.
+            </p>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {featureFlagDefinitions.map((flag) => {
+              const enabled = flags[flag.key];
+              const isUpdating = updatingFlags[flag.key];
+              return (
+                <div key={flag.key} className="flex items-center justify-between gap-4 px-6 py-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-semibold text-slate-900">{flag.label}</div>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {enabled ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-sm text-slate-500">{flag.description}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleToggleFlag(flag.key, !enabled)}
+                    disabled={isUpdating}
+                    aria-pressed={enabled}
+                    className={`relative h-7 w-14 rounded-full transition-colors ${
+                      enabled ? 'bg-emerald-500' : 'bg-slate-300'
+                    } ${isUpdating ? 'opacity-60' : ''}`}
+                    title={enabled ? `Disable ${flag.label}` : `Enable ${flag.label}`}
+                  >
+                    <span
+                      className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${
+                        enabled ? 'left-8' : 'left-1'
+                      }`}
+                    />
+                    {isUpdating ? <Loader2 size={12} className="absolute inset-0 m-auto animate-spin text-white" /> : null}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       {/* Audit Log Section */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
