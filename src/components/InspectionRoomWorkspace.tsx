@@ -127,7 +127,7 @@ export const InspectionRoomWorkspace: React.FC<InspectionRoomWorkspaceProps> = (
 
       {captureStrip}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+      <div className="space-y-4">
         {checklistPanel}
         {feed}
       </div>
