@@ -7,6 +7,20 @@ export type ProcurementDraftStatus =
   | 'canceled';
 
 export type MatchConfidenceBand = 'exact' | 'close' | 'loose' | 'manual';
+export type ProcurementBundleId =
+  | 'paint-turnover'
+  | 'blinds-replacement'
+  | 'bathroom-refresh'
+  | 'electrical-refresh'
+  | 'lvp-flooring'
+  | 'carpet-replacement'
+  | 'door-hardware';
+export type ProcurementBundleQuantityStrategy = 'per_unit' | 'per_room' | 'per_item' | 'sqft' | 'manual';
+export type ProcurementProductResolutionMethod =
+  | 'exact_category'
+  | 'alias'
+  | 'fallback_category'
+  | 'manual_needed';
 export type ProcurementOptimizationSignal =
   | 'better_pack_size_available'
   | 'combine_with_other_units'
@@ -130,6 +144,89 @@ export interface ProcurementReviewGuidance {
   title: string;
   detail: string;
   source: 'match' | 'vendor' | 'optimization';
+}
+
+export interface ProcurementBundleLine {
+  id: string;
+  category: string;
+  label: string;
+  quantityStrategy: ProcurementBundleQuantityStrategy;
+  defaultQuantity?: number;
+  notes?: string;
+  lowesCategory?: string;
+}
+
+export interface ProcurementBundleDefinition {
+  id: ProcurementBundleId;
+  label: string;
+  description: string;
+  triggerTemplateItemIds?: string[];
+  triggerLowesCategories?: string[];
+  preferredProductTier?: 'high' | 'mid' | 'low';
+  lines: ProcurementBundleLine[];
+}
+
+export interface ResolvedProcurementBundleLine {
+  id: string;
+  category: string;
+  label: string;
+  quantity: number | null;
+  quantityStrategy: ProcurementBundleQuantityStrategy;
+  notes?: string;
+  lowesCategory?: string;
+}
+
+export interface ResolvedProcurementBundle {
+  id: ProcurementBundleId;
+  label: string;
+  description: string;
+  sourceInspectionId: string;
+  sourceGeneratedItemIds: string[];
+  sourceRequirementIds: string[];
+  sourceRepairTaskIds: string[];
+  preferredProductTier?: 'high' | 'mid' | 'low';
+  lines: ResolvedProcurementBundleLine[];
+}
+
+export interface ProcurementProductAlternate {
+  productId: string;
+  productLabel: string;
+  optionId?: string;
+  optionLabel: string;
+  sku?: string;
+  vendor?: string;
+  price?: number;
+  unit: string;
+  reason: string;
+}
+
+export interface ResolvedProcurementProductRecommendation {
+  id: string;
+  bundleId: ProcurementBundleId;
+  bundleLabel: string;
+  bundleLineId: string;
+  bundleLineLabel: string;
+  sourceInspectionId: string;
+  sourceGeneratedItemIds: string[];
+  sourceRequirementIds: string[];
+  preferredProductTier?: 'high' | 'mid' | 'low';
+  resolutionMethod: ProcurementProductResolutionMethod;
+  confidenceBand: MatchConfidenceBand;
+  status: 'resolved' | 'manual_needed';
+  lowesCategory?: string;
+  recommendedProductId?: string;
+  recommendedProductLabel?: string;
+  recommendedOptionId?: string;
+  recommendedOptionLabel?: string;
+  recommendedSku?: string;
+  recommendedVendor?: string;
+  quantity: number | null;
+  unit: string;
+  estimatedUnitPrice?: number;
+  estimatedLineCost?: number;
+  optimization?: ProcurementOptimization;
+  alternates: ProcurementProductAlternate[];
+  rationale: string[];
 }
 
 export interface ProcurementDraftItem {
