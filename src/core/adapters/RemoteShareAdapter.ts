@@ -1,4 +1,29 @@
 export interface RemoteShareAdapter {
+  registerShareLink(params: {
+    link: {
+      id: string;
+      orgId: string;
+      token: string;
+      resourceId: string;
+      inspectionId?: string;
+      expiresAt: number;
+      createdAt: number;
+      createdByUserId: string;
+      createdByRole: string;
+      resourceBucket?: string;
+      resourcePath?: string;
+      resourceContentType?: string;
+      resourceLabel?: string;
+    };
+  }): Promise<void>;
+
+  revokeShareLink(params: {
+    orgId: string;
+    token: string;
+    revokedAt: number;
+    revokedByUserId?: string;
+  }): Promise<void>;
+
   resolveShareToken(params: { 
     token: string 
   }): Promise<{ 
@@ -7,6 +32,8 @@ export interface RemoteShareAdapter {
     path?: string; 
     url?: string; 
     expiresAt?: number; 
+    contentType?: string;
+    title?: string;
   }>;
 
   logShareAccess(params: { 

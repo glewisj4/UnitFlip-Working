@@ -18,6 +18,8 @@ export const ShareLinkViewer: React.FC<ShareLinkViewerProps> = ({ token }) => {
   const [link, setLink] = useState<ShareLink | null>(null);
   const [report, setReport] = useState<ReportJob | null>(null);
   const [remotePdfUrl, setRemotePdfUrl] = useState<string | null>(null);
+  const [remoteContentType, setRemoteContentType] = useState<string | null>(null);
+  const [remoteTitle, setRemoteTitle] = useState<string>('Inspection report');
 
   const shareAdapter = useMemo<RemoteShareAdapter | null>(() => {
     if (import.meta.env.VITE_USE_EDGE_FUNCTIONS === 'true') {
@@ -44,15 +46,17 @@ export const ShareLinkViewer: React.FC<ShareLinkViewerProps> = ({ token }) => {
         }
 
         // For remote, we might not have the full 'link' object locally
-        // but we need some basic info for the UI
+        // but we still keep enough metadata for expiry messaging in the viewer
         setLink({
           token,
           expiresAt: result.expiresAt || 0,
-          orgId: 'remote', // Placeholder
-          resourceId: 'remote',
+          orgId: 'remote',
+          resourceId: token,
         } as any);
 
         setRemotePdfUrl(result.url || null);
+        setRemoteContentType(result.contentType || null);
+        setRemoteTitle(result.title || 'Inspection report');
         
         // Log remote access
         await shareAdapter.logShareAccess({ token, action: 'VIEW' });
@@ -174,7 +178,8 @@ export const ShareLinkViewer: React.FC<ShareLinkViewerProps> = ({ token }) => {
   if (!link || (!report && !remotePdfUrl)) return null;
 
   const pdfUrl = remotePdfUrl || report?.pdf?.url;
-  const createdAt = report ? new Date(report.createdAt).toLocaleDateString() : 'Unknown';
+  const createdAt = report ? new Date(report.createdAt).toLocaleDateString() : 'Available now';
+  const shouldEmbedRemoteReport = Boolean(remotePdfUrl) && (remoteContentType?.includes('html') || remoteContentType?.includes('pdf'));
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col print:min-h-0 print:bg-white">
@@ -185,7 +190,7 @@ export const ShareLinkViewer: React.FC<ShareLinkViewerProps> = ({ token }) => {
                     <FileText size={24} className="text-lowes-blue" />
                 </div>
                 <div>
-                    <h1 className="font-bold text-slate-800">Inspection Report</h1>
+                    <h1 className="font-bold text-slate-800">{remoteTitle || 'Inspection Report'}</h1>
                     <p className="text-xs text-slate-500">Shared via UnitFlip</p>
                 </div>
             </div>
@@ -195,7 +200,7 @@ export const ShareLinkViewer: React.FC<ShareLinkViewerProps> = ({ token }) => {
       <div className="flex-1 p-6 print:p-0">
         <div className="max-w-3xl mx-auto bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden print:max-w-none print:rounded-none print:border-0 print:shadow-none">
             <div className="p-8 text-center border-b border-slate-100 print:border-b-0 print:px-0 print:pt-0 print:pb-4">
-                <h2 className="text-2xl font-bold text-slate-800 mb-2 print:text-left print:text-xl">PDF Report Ready</h2>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2 print:text-left print:text-xl">Inspection Report Ready</h2>
                 <p className="text-slate-600 mb-6 print:mb-4 print:text-left">
                     Generated on {createdAt}
                 </p>
@@ -208,16 +213,25 @@ export const ShareLinkViewer: React.FC<ShareLinkViewerProps> = ({ token }) => {
                 />
                 
                 {pdfUrl ? (
-                    <button 
-                        onClick={handleDownload}
-                        className="bg-lowes-blue text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 mx-auto print:hidden"
-                    >
-                        <Download size={20} />
-                        Download PDF Report
-                    </button>
+                    <div className="space-y-4">
+                        {shouldEmbedRemoteReport ? (
+                            <iframe
+                                src={pdfUrl}
+                                title={remoteTitle || 'Inspection report'}
+                                className="hidden min-h-[70vh] w-full rounded-xl border border-slate-200 bg-white md:block"
+                            />
+                        ) : null}
+                        <button
+                            onClick={handleDownload}
+                            className="bg-lowes-blue text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors flex items-center gap-2 mx-auto print:hidden"
+                        >
+                            <Download size={20} />
+                            Open Report
+                        </button>
+                    </div>
                 ) : (
                     <div className="text-amber-600 bg-amber-50 p-4 rounded-lg inline-block print:rounded-none print:border print:border-slate-300 print:bg-white print:text-slate-700">
-                        PDF file is not available.
+                        Report file is not available.
                     </div>
                 )}
             </div>

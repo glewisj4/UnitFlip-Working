@@ -3,10 +3,13 @@ import { ShareLink, ShareAccessEvent, ShareResourceType } from '../models/share'
 import { Role } from '../models/auth';
 import { createId } from '../../services/storage';
 import { SyncQueueService } from './SyncQueueService';
+import { AuthPolicyService } from './AuthPolicyService';
+import { EdgeFunctionShareAdapter } from '../adapters/EdgeFunctionShareAdapter';
 
 const LINKS_KEY_PREFIX = 'unitflip_share_links_v1:';
 const ACCESS_KEY_PREFIX = 'unitflip_share_access_v1:';
 const adapter = createLocalDbAdapter();
+const remoteShareAdapter = import.meta.env.VITE_USE_EDGE_FUNCTIONS === 'true' ? new EdgeFunctionShareAdapter() : null;
 
 // Helper to encode/decode base64url
 const toBase64Url = (str: string) => btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -19,11 +22,15 @@ export const ShareLinkService = {
     role: Role; 
     reportId: string; 
     inspectionId?: string; 
-    expiresAt?: number 
+    expiresAt?: number;
+    resourceBucket?: string;
+    resourcePath?: string;
+    resourceContentType?: string;
+    resourceLabel?: string;
   }): Promise<ShareLink> {
     // RBAC Check
-    if (params.role !== 'admin' && params.role !== 'manager') {
-      throw new Error('Unauthorized: Only admins and managers can create share links');
+    if (!AuthPolicyService.canManageShareLinks(params.role)) {
+      throw new Error('Unauthorized: Only admins and developers can create share links');
     }
 
     const key = `${LINKS_KEY_PREFIX}${params.orgId}`;
@@ -46,8 +53,32 @@ export const ShareLinkService = {
       resourceType: 'report_pdf',
       resourceId: params.reportId,
       inspectionId: params.inspectionId,
+      resourceBucket: params.resourceBucket,
+      resourcePath: params.resourcePath,
+      resourceContentType: params.resourceContentType,
+      resourceLabel: params.resourceLabel,
       expiresAt: params.expiresAt || Date.now() + 7 * 24 * 60 * 60 * 1000, // 7 days default
     };
+
+    if (remoteShareAdapter) {
+      await remoteShareAdapter.registerShareLink({
+        link: {
+          id: newLink.id,
+          orgId: newLink.orgId,
+          token: newLink.token,
+          resourceId: newLink.resourceId,
+          inspectionId: newLink.inspectionId,
+          expiresAt: newLink.expiresAt,
+          createdAt: newLink.createdAt,
+          createdByUserId: newLink.createdByUserId,
+          createdByRole: newLink.createdByRole,
+          resourceBucket: newLink.resourceBucket,
+          resourcePath: newLink.resourcePath,
+          resourceContentType: newLink.resourceContentType,
+          resourceLabel: newLink.resourceLabel,
+        },
+      });
+    }
 
     links.push(newLink);
     await adapter.setItem(key, links);
@@ -79,18 +110,28 @@ export const ShareLinkService = {
 
   async revokeLink(params: { orgId: string; userId: string; role: Role; token: string }): Promise<void> {
     // RBAC Check
-    if (params.role !== 'admin' && params.role !== 'manager') {
-      throw new Error('Unauthorized: Only admins and managers can revoke share links');
+    if (!AuthPolicyService.canManageShareLinks(params.role)) {
+      throw new Error('Unauthorized: Only admins and developers can revoke share links');
     }
 
     const key = `${LINKS_KEY_PREFIX}${params.orgId}`;
     const links = (await adapter.getItem<ShareLink[]>(key)) || [];
+    const revokedAt = Date.now();
+
+    if (remoteShareAdapter) {
+      await remoteShareAdapter.revokeShareLink({
+        orgId: params.orgId,
+        token: params.token,
+        revokedAt,
+        revokedByUserId: params.userId,
+      });
+    }
 
     const updatedLinks = links.map(l => {
       if (l.token === params.token) {
         return {
           ...l,
-          revokedAt: Date.now(),
+          revokedAt,
           revokedByUserId: params.userId
         };
       }

@@ -13,6 +13,10 @@ export interface ShareLink {
   resourceType: ShareResourceType;
   resourceId: string;         // reportId (preferred)
   inspectionId?: string;
+  resourceBucket?: string;
+  resourcePath?: string;
+  resourceContentType?: string;
+  resourceLabel?: string;
 
   expiresAt: number;          // default now + 7 days
   revokedAt?: number;
