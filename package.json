@@ -4,10 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 5174",
+    "dev": "vite --host 0.0.0.0 --port 3000 --strictPort",
     "build": "vite build",
-    "preview": "vite preview --port 4174",
-    "lint": "tsc --noEmit"
+    "preview": "node .\\scripts\\preview-dist.mjs --port 3001",
+    "preview:vite": "vite preview --host 0.0.0.0 --port 3001 --strictPort",
+    "lint": "tsc --noEmit",
+    "refresh:prod": "powershell -ExecutionPolicy Bypass -File .\\scripts\\refresh-unitflip-runtime.ps1"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

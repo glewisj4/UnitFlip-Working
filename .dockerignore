@@ -4,7 +4,12 @@ dist
 .gitignore
 docs
 server
-supabase
+supabase/*
+!supabase/functions/
+supabase/functions/*
+!supabase/functions/_shared/
+supabase/functions/_shared/*
+!supabase/functions/_shared/reportRenderer.ts
 npm-debug.log*
 Dockerfile*
 compose*.yml

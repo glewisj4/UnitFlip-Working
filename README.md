@@ -18,6 +18,17 @@ Prerequisites: Node.js
    `npm run lint`
 4. Production build:
    `npm run build`
+5. Preview the validated production build:
+   `npm run preview`
+
+`npm run preview` serves the built `dist` folder with a small Node server at [http://localhost:3001](http://localhost:3001). Use this only for UnitFlip prod/local preview after `npm run build`; UnitFlip dev/testing stays on [http://localhost:3000](http://localhost:3000). If you specifically need Vite's preview server, use `npm run preview:vite`.
+
+## Port and Tunnel Contract
+
+- UnitFlip dev/testing: [http://localhost:3000](http://localhost:3000)
+- Temporary compatibility dev entry: [http://localhost:3100](http://localhost:3100), mapped to the same dev container until the Cloudflare tunnel target is verified.
+- UnitFlip prod/local preview: [http://localhost:3001](http://localhost:3001)
+- `field.fugetti.com` should point to UnitFlip dev/testing at canonical `localhost:3000`, never to prod/local preview on `3001`. Keep the `3100` compatibility mapping until the live tunnel target is confirmed.
 
 ## Docker-Friendly Local Config
 

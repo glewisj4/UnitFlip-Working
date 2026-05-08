@@ -1,0 +1,13 @@
+services:
+  unitflip:
+    container_name: unitflip-prod
+    build:
+      context: .
+      target: prod
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+        VITE_USE_EDGE_FUNCTIONS: ${VITE_USE_EDGE_FUNCTIONS:-true}
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
