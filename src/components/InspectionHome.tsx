@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, ClipboardList, Clock3, Home, PlayCircle, Plus, RefreshCw } from 'lucide-react';
 import { Inspection, Unit } from '../core/models/inspections';
+import { GeneratedInspectionItem, GeneratedInspectionSection } from '../core/models/templates';
 import { DevSeedService } from '../core/services/DevSeedService';
 import { InspectionService } from '../core/services/InspectionService';
 import { UnitService } from '../core/services/UnitService';
@@ -12,7 +13,59 @@ interface InspectionHomeProps {
   onOpenPortfolio?: () => void;
 }
 
-const formatInspectionStatus = (status: Inspection['status']) => status.replace(/_/g, ' ');
+const getRoomKey = (section: GeneratedInspectionSection) => section.roomLabel || section.title || 'Unit Overview';
+
+const itemNeedsFollowThrough = (item: GeneratedInspectionItem) =>
+  item.status === 'in_progress' || item.status === 'not_started' || item.status === 'blocked' || item.status === 'failed';
+
+const getInspectionProgressSummary = (inspection: Inspection) => {
+  const sections = inspection.generatedSections || [];
+  const items = (inspection.generatedItems || []).length > 0
+    ? inspection.generatedItems || []
+    : sections.flatMap((section) => section.items || []);
+  const totalCount = items.length;
+  const completedCount = items.filter((item) => item.status === 'completed' || item.status === 'not_applicable').length;
+  const activeCount = items.filter((item) => item.status === 'in_progress').length;
+  const blockedCount = items.filter((item) => item.status === 'blocked' || item.status === 'failed').length;
+
+  const prioritizedItem =
+    items.find((item) => item.status === 'in_progress') ||
+    items.find((item) => item.status === 'blocked' || item.status === 'failed') ||
+    items.find((item) => item.status === 'not_started') ||
+    null;
+  const nextSection = sections.find((section) => (section.items || []).some((item) => itemNeedsFollowThrough(item))) || null;
+  const nextRoomLabel =
+    prioritizedItem?.roomLabel ||
+    nextSection?.roomLabel ||
+    nextSection?.title ||
+    (sections[0] ? getRoomKey(sections[0]) : 'Unit Overview');
+
+  const nextItemLabel = prioritizedItem?.label || null;
+  const hasProgress = totalCount > 0;
+  const progressLabel = hasProgress
+    ? `${completedCount}/${totalCount} checklist items complete`
+    : inspection.status === 'draft'
+      ? 'Checklist generated and ready to continue'
+      : 'Inspection ready to continue';
+  const stateLabel =
+    inspection.status === 'in_progress'
+      ? activeCount > 0
+        ? 'In Progress'
+        : completedCount > 0
+          ? 'Partially Complete'
+          : 'Ready to Continue'
+      : completedCount > 0
+        ? 'Partially Complete'
+        : 'Draft';
+
+  return {
+    nextRoomLabel,
+    nextItemLabel,
+    progressLabel,
+    stateLabel,
+    blockedCount,
+  };
+};
 
 const getStatusClasses = (status: Inspection['status']) => {
   switch (status) {
@@ -38,6 +91,8 @@ export const InspectionHome: React.FC<InspectionHomeProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [refreshNonce, setRefreshNonce] = useState(0);
   const unitPickerRef = useRef<HTMLElement | null>(null);
+  const resumeSectionRef = useRef<HTMLElement | null>(null);
+  const firstResumeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (!org) return;
@@ -108,36 +163,39 @@ export const InspectionHome: React.FC<InspectionHomeProps> = ({
     });
   };
 
+  const handleStartInspection = () => {
+    if (activeInspections.length > 0) {
+      window.requestAnimationFrame(() => {
+        resumeSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        firstResumeButtonRef.current?.focus();
+      });
+      return;
+    }
+
+    focusUnitPicker();
+  };
+
   return (
-    <div className="space-y-8">
-      <section className="rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50 p-6 shadow-sm">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-2xl">
+    <div className="space-y-5">
+      <section className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="max-w-2xl space-y-1">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-lowes-blue">Inspection</p>
-            <h1 className="mt-2 text-3xl font-bold text-slate-900">Start or continue inspection work.</h1>
-            <p className="mt-3 text-sm text-slate-600">
-              This is the operational surface for field work. Start a new inspection from a unit or jump back into one that is already in motion.
-            </p>
+            <h1 className="text-2xl font-bold text-slate-900">Start or continue inspection work.</h1>
+            <p className="text-sm text-slate-600">Start Inspection resumes active work first, then falls back to unit selection.</p>
           </div>
-          <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
             <button
-              onClick={focusUnitPicker}
+              onClick={handleStartInspection}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-lowes-blue px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-700"
             >
               <PlayCircle size={18} />
               Start Inspection
             </button>
-            <button
-              onClick={focusUnitPicker}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100"
-            >
-              <Home size={18} />
-              Choose Unit
-            </button>
             {onOpenPortfolio ? (
               <button
                 onClick={onOpenPortfolio}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-100"
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100"
               >
                 <ArrowRight size={18} />
                 Open Portfolio
@@ -147,38 +205,39 @@ export const InspectionHome: React.FC<InspectionHomeProps> = ({
         </div>
       </section>
 
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Active</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">{activeInspections.length}</div>
-          <p className="mt-2 text-sm text-slate-500">Inspections ready to resume without browsing through records.</p>
+          <div className="mt-1 text-2xl font-bold text-slate-900">{activeInspections.length}</div>
+          <p className="mt-1 text-sm text-slate-500">Ready to resume.</p>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Units</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">{units.length}</div>
-          <p className="mt-2 text-sm text-slate-500">Available units you can launch from right now.</p>
+          <div className="mt-1 text-2xl font-bold text-slate-900">{units.length}</div>
+          <p className="mt-1 text-sm text-slate-500">Available to launch.</p>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Completed</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">
+          <div className="mt-1 text-2xl font-bold text-slate-900">
             {inspections.filter((inspection) => inspection.status === 'completed').length}
           </div>
-          <p className="mt-2 text-sm text-slate-500">Finished inspections stay available in Unit Management for review and organization.</p>
+          <p className="mt-1 text-sm text-slate-500">Available for review later.</p>
         </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex items-center justify-between gap-4">
+      <section ref={resumeSectionRef} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Resume active inspections</h2>
-            <p className="mt-1 text-sm text-slate-500">Continue inspections that are still draft or in progress.</p>
+            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-lowes-blue">Continue Work</div>
+            <h2 className="mt-1 text-xl font-semibold text-slate-900">Resume active inspections</h2>
+            <p className="mt-1 text-sm text-slate-500">Pick up where you left off. Each inspection continues directly into its current checklist.</p>
           </div>
           <button
             onClick={focusUnitPicker}
             className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100"
           >
             <Plus size={16} />
-            Start from unit
+            Choose Different Unit
           </button>
         </div>
 
@@ -188,36 +247,57 @@ export const InspectionHome: React.FC<InspectionHomeProps> = ({
             Loading inspection activity...
           </div>
         ) : activeInspections.length === 0 ? (
-          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
-            <ClipboardList size={42} className="mx-auto text-slate-300" />
-            <p className="mt-4 text-sm text-slate-600">No active inspections yet. Start from a unit to create the next inspection record.</p>
+          <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center">
+            <ClipboardList size={36} className="mx-auto text-slate-300" />
+            <p className="mt-3 text-sm text-slate-600">No active inspections yet.</p>
           </div>
         ) : (
-          <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {activeInspections.map((inspection) => {
+          <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
+            {activeInspections.map((inspection, index) => {
               const unit = unitsById[inspection.unitId];
+              const progress = getInspectionProgressSummary(inspection);
               return (
                 <button
                   key={inspection.id}
+                  ref={index === 0 ? firstResumeButtonRef : null}
                   onClick={() => onResumeInspection(inspection.id)}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-left transition-all hover:border-lowes-blue hover:bg-white hover:shadow-sm"
+                  className={`rounded-2xl border p-4 text-left transition-all hover:border-lowes-blue hover:bg-white hover:shadow-sm ${
+                    index === 0
+                      ? 'border-lowes-blue bg-blue-50/50 shadow-sm'
+                      : 'border-slate-200 bg-slate-50'
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">{inspection.title}</div>
-                      <div className="mt-1 text-sm text-slate-500">{unit?.name || 'Unknown unit'}</div>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-lowes-blue">
+                        {index === 0 ? 'Continue Next' : 'Active Inspection'}
+                      </div>
+                      <div className="mt-1 text-base font-semibold text-slate-900">{unit?.name || 'Unknown unit'}</div>
+                      <div className="mt-1 text-sm text-slate-500">{inspection.title}</div>
                     </div>
                     <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${getStatusClasses(inspection.status)}`}>
-                      {formatInspectionStatus(inspection.status)}
+                      {progress.stateLabel}
                     </span>
                   </div>
-                  <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
-                    <span className="inline-flex items-center gap-1">
+
+                  <div className="mt-3 space-y-2 text-sm text-slate-600">
+                    <div className="font-medium text-slate-900">
+                      Continue in {progress.nextRoomLabel}
+                      {progress.nextItemLabel ? ` • ${progress.nextItemLabel}` : ''}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                      <span>{progress.progressLabel}</span>
+                      {progress.blockedCount > 0 ? <span>{progress.blockedCount} item{progress.blockedCount === 1 ? '' : 's'} need attention</span> : null}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                    <span className="inline-flex items-center gap-1 shrink-0">
                       <Clock3 size={14} />
                       Updated {new Date(inspection.updatedAt).toLocaleString()}
                     </span>
                     <span className="inline-flex items-center gap-1 font-medium text-lowes-blue">
-                      Resume
+                      Resume Inspection
                       <ArrowRight size={14} />
                     </span>
                   </div>
@@ -228,14 +308,12 @@ export const InspectionHome: React.FC<InspectionHomeProps> = ({
         )}
       </section>
 
-      <section ref={unitPickerRef} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <section ref={unitPickerRef} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div>
           <h2 className="text-xl font-semibold text-slate-900">Choose a unit to start</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Pick a unit and continue into the guided inspection flow. Recent units stay visible first, and the full list is one tap away.
-          </p>
+          <p className="mt-1 text-sm text-slate-500">Recent units first, full list one tap away.</p>
         </div>
-        <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <input
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
@@ -253,17 +331,17 @@ export const InspectionHome: React.FC<InspectionHomeProps> = ({
         </div>
 
         {isLoading ? null : recentUnits.length === 0 ? (
-          <div className="mt-6 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
+          <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center">
             <Home size={42} className="mx-auto text-slate-300" />
             <p className="mt-4 text-sm text-slate-600">No units are available yet. Create units in Unit Management first.</p>
           </div>
         ) : (
-          <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {visibleUnits.map((unit) => (
               <button
                 key={unit.id}
                 onClick={() => onSelectUnit(unit.id)}
-                className="rounded-2xl border border-slate-200 bg-white p-5 text-left transition-all hover:border-lowes-blue hover:shadow-sm"
+                className="rounded-2xl border border-slate-200 bg-white p-4 text-left transition-all hover:border-lowes-blue hover:shadow-sm"
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-lowes-blue">
@@ -271,7 +349,7 @@ export const InspectionHome: React.FC<InspectionHomeProps> = ({
                   </div>
                   <span className="text-xs text-slate-400">Updated {new Date(unit.updatedAt).toLocaleDateString()}</span>
                 </div>
-                <div className="mt-4 text-base font-semibold text-slate-900">{unit.name}</div>
+                <div className="mt-3 text-base font-semibold text-slate-900">{unit.name}</div>
                 <div className="mt-1 text-sm text-slate-500">
                   {[unit.address1, unit.city, unit.state].filter(Boolean).join(', ') || 'No location details yet'}
                 </div>
@@ -289,7 +367,7 @@ export const InspectionHome: React.FC<InspectionHomeProps> = ({
                     ) : null}
                   </div>
                 ) : null}
-                <div className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-lowes-blue">
+                <div className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-lowes-blue">
                   Open unit
                   <ArrowRight size={14} />
                 </div>

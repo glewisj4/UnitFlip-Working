@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { ArrowLeft, Save, Camera, Trash2, Loader2, FileText, Download, AlertCircle, Share2, Copy, XCircle, Clock, CheckCircle2, Wrench, PackagePlus, TriangleAlert, StickyNote, ChevronDown } from 'lucide-react';
+import { ArrowLeft, Save, Camera, Trash2, Loader2, FileText, Download, AlertCircle, Share2, Copy, XCircle, Clock, CheckCircle2, Wrench, PackagePlus, TriangleAlert, StickyNote, ChevronDown, Ruler, Hash } from 'lucide-react';
 import { Inspection, InspectionStatus } from '../core/models/inspections';
 import { InspectionService } from '../core/services/InspectionService';
 import { MediaService } from '../core/services/MediaService';
@@ -18,9 +18,10 @@ import { ProductInstance, CatalogItem } from '../core/models/types';
 import { ProductSelectorModal } from './ProductSelectorModal';
 import { Package, PlusCircle, MinusCircle } from 'lucide-react';
 import { InspectionIntelligencePanel } from './InspectionIntelligencePanel';
-import { GeneratedInspectionSection, GeneratedInspectionItemStatus } from '../core/models/templates';
-import { Finding, RepairTask } from '../core/models/operations';
+import { GeneratedInspectionSection, GeneratedInspectionItem, GeneratedInspectionItemStatus } from '../core/models/templates';
+import { Finding, MaterialRequirement, RepairTask } from '../core/models/operations';
 import { FindingService } from '../core/services/FindingService';
+import { MaterialRequirementService } from '../core/services/MaterialRequirementService';
 import { RepairTaskService } from '../core/services/RepairTaskService';
 import { createInspectionOperationalSummary } from '../core/services/InspectionReportSnapshotService';
 import { ReportProcurementInsights } from './ReportProcurementInsights';
@@ -41,6 +42,10 @@ import { UnitService } from '../core/services/UnitService';
 import { Unit } from '../core/models/inspections';
 import { ProductRecommendationPanel } from './ProductRecommendationPanel';
 import { ProductRecommendationService } from '../core/services/ProductRecommendationService';
+import { ChecklistAlwaysReplaceService } from '../core/services/ChecklistAlwaysReplaceService';
+import { ProcurementBundleService } from '../core/services/ProcurementBundleService';
+import { ProcurementProductResolutionService } from '../core/services/ProcurementProductResolutionService';
+import { Role } from '../core/models/auth';
 
 interface InspectionDetailProps {
   inspectionId: string;
@@ -134,6 +139,115 @@ interface FeedEditSaveState {
 }
 
 const titleCase = (value: string) => value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+const isAlwaysReplaceChecklistItem = (item: GeneratedInspectionItem) => item.itemType === 'always_replace';
+const getAlwaysReplaceCountQuantity = (item: GeneratedInspectionItem) =>
+  Math.max(1, Math.round(Number(item.inputValue?.quantity ?? item.defaultQuantity ?? 1)) || 1);
+const hasLinkedAlwaysReplaceRecords = (item: GeneratedInspectionItem) =>
+  ((item.repairTaskIds?.length || 0) > 0) || ((item.materialRequirementIds?.length || 0) > 0);
+const isAlwaysReplaceInputComplete = (item: GeneratedInspectionItem) => {
+  if (!isAlwaysReplaceChecklistItem(item)) return false;
+  if (hasLinkedAlwaysReplaceRecords(item)) return true;
+  if (item.inputMode === 'count') {
+    return typeof item.inputValue?.quantity === 'number' && item.inputValue.quantity > 0;
+  }
+  if (item.inputMode === 'dimensions') {
+    return Boolean(item.inputValue?.dimensions && item.inputValue.dimensions.width > 0 && item.inputValue.dimensions.height > 0);
+  }
+  if (item.inputMode === 'area') {
+    return Boolean(item.inputValue?.area && item.inputValue.area > 0);
+  }
+  return true;
+};
+const getAlwaysReplaceInputSummary = (item: GeneratedInspectionItem) => {
+  if (item.inputMode === 'count') {
+    const quantity = getAlwaysReplaceCountQuantity(item);
+    return typeof quantity === 'number' && quantity > 0 ? `${quantity} ${item.materialReference?.unit || 'ea'}` : 'Count needed';
+  }
+
+  if (item.inputMode === 'dimensions') {
+    const dimensions = item.inputValue?.dimensions;
+    return dimensions ? `${dimensions.width} x ${dimensions.height} ${dimensions.unit || 'in'}` : 'Width x height needed';
+  }
+
+  if (item.inputMode === 'area') {
+    return typeof item.inputValue?.area === 'number' && item.inputValue.area > 0
+      ? `${item.inputValue.area} ${item.materialReference?.unit || 'sq_ft'}`
+      : 'Area needed';
+  }
+
+  return 'Standard replacement';
+};
+
+const buildChecklistGuidance = (item: GeneratedInspectionItem) => {
+  if (item.itemType === 'always_replace') {
+    if (item.requiresMeasurements && item.dataFields.length > 0) {
+      return `Capture ${item.dataFields.join(', ')} before saving this standard replacement.`;
+    }
+    return 'Save the standard replacement directly into a repair task and material requirement.';
+  }
+
+  if (item.focusedAction === 'repair' && item.repairOptions.length > 0) {
+    return `Repair options: ${item.repairOptions.join(', ')}.`;
+  }
+  if (item.focusedAction === 'replace' && item.replaceOptions.length > 0) {
+    const presetSuffix = item.preferredReplaceOption ? ` Preset preference: ${item.preferredReplaceOption}.` : '';
+    return `Replace options: ${item.replaceOptions.join(', ')}.${presetSuffix}`;
+  }
+  if (item.requiresMeasurements && item.dataFields.length > 0) {
+    return `Measurements may be needed: ${item.dataFields.join(', ')}.`;
+  }
+  return null;
+};
+
+type RoomChecklistEntry = {
+  section: GeneratedInspectionSection;
+  item: GeneratedInspectionItem;
+  hasUnsavedDraft: boolean;
+  isCompleted: boolean;
+  hasCommittedCapture: boolean;
+  needsAttention: boolean;
+  rowState: 'draft' | 'completed' | 'captured' | 'untouched';
+};
+
+type RoomChecklistIntentGroupId = 'attention' | 'progress' | 'done';
+type GeneratedSnapshotEntry = {
+  section: GeneratedInspectionSection;
+  item: GeneratedInspectionItem;
+  needsAttention: boolean;
+  isComplete: boolean;
+  hasProcurementImpact: boolean;
+};
+
+const getRoomChecklistEntrySortWeight = (entry: RoomChecklistEntry) => {
+  if (entry.hasUnsavedDraft) return 0;
+  if (entry.item.status === 'failed') return 1;
+  if (entry.item.status === 'blocked') return 2;
+  if (entry.rowState === 'untouched') return 3;
+  if (entry.rowState === 'captured') return 4;
+  if (entry.rowState === 'completed') return 5;
+  return 6;
+};
+
+const getRoomChecklistIntentGroup = (entry: RoomChecklistEntry): RoomChecklistIntentGroupId => {
+  if (entry.hasUnsavedDraft || entry.rowState === 'untouched' || entry.item.status === 'failed' || entry.item.status === 'blocked') {
+    return 'attention';
+  }
+  if (entry.rowState === 'captured') {
+    return 'progress';
+  }
+  return 'done';
+};
+
+const inspectionStatusBadgeClass = (status: InspectionStatus) => {
+  switch (status) {
+    case 'completed':
+      return 'bg-emerald-100 text-emerald-800';
+    case 'in_progress':
+      return 'bg-blue-100 text-blue-800';
+    default:
+      return 'bg-slate-100 text-slate-700';
+  }
+};
 
 const formatTimestampLabel = (timestamp: number) =>
   new Date(timestamp).toLocaleTimeString([], {
@@ -217,7 +331,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
   onPersistInspectionContext,
   onBack,
 }) => {
-  const { org, user, flags } = useAppContext();
+  const { org, user, role, flags } = useAppContext();
   const { log } = useAuditLogger();
   const { triggerSyncNow } = useSyncEngine();
   const { addCatalogItemToList } = useCatalog();
@@ -232,9 +346,11 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
   const [isUploading, setIsUploading] = useState(false);
   const [latestReport, setLatestReport] = useState<ReportJob | null>(null);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportStatusMessage, setReportStatusMessage] = useState<{ tone: 'info' | 'success' | 'error'; text: string } | null>(null);
   const [generatedSections, setGeneratedSections] = useState<GeneratedInspectionSection[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [repairTasks, setRepairTasks] = useState<RepairTask[]>([]);
+  const [materialRequirements, setMaterialRequirements] = useState<MaterialRequirement[]>([]);
   const [checklistMessage, setChecklistMessage] = useState<string | null>(null);
   const [captureBridgeMessage, setCaptureBridgeMessage] = useState<string | null>(null);
   const [captureBridgeTarget, setCaptureBridgeTarget] = useState<{ entityType: 'finding' | 'task'; entityId: string } | null>(null);
@@ -265,6 +381,8 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
   // Share state
   const [shareLinks, setShareLinks] = useState<ShareLink[]>([]);
   const [isCreatingLink, setIsCreatingLink] = useState(false);
+  const [shareStatusMessage, setShareStatusMessage] = useState<{ tone: 'info' | 'success' | 'error'; text: string } | null>(null);
+  const [revokingToken, setRevokingToken] = useState<string | null>(null);
   const [expiryDays, setExpiryDays] = useState(7);
 
   // Product selection state
@@ -311,6 +429,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
       loadCatalogLibrary();
       loadFindings();
       loadRepairTasks();
+      loadMaterialRequirements();
       if (flags?.public_share_links) {
         loadShareLinks();
       }
@@ -436,11 +555,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
               ? parsedSession.activeChecklistDraftItemId
               : null
           );
-          setExpandedChecklistItemId(
-            parsedSession.activeChecklistDraftItemId && restoredDrafts[parsedSession.activeChecklistDraftItemId]
-              ? parsedSession.activeChecklistDraftItemId
-              : null
-          );
+          setExpandedChecklistItemId(null);
         }
       }
     } catch (error) {
@@ -590,8 +705,14 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
     setRepairTasks(nextTasks);
   };
 
+  const loadMaterialRequirements = async () => {
+    if (!org) return;
+    const nextRequirements = await MaterialRequirementService.listRequirements(org.id, { inspectionId });
+    setMaterialRequirements(nextRequirements);
+  };
+
   const refreshCaptureData = async () => {
-    await Promise.all([loadFindings(), loadRepairTasks()]);
+    await Promise.all([loadFindings(), loadRepairTasks(), loadMaterialRequirements()]);
     setInspectionIntelligenceRefreshToken((current) => current + 1);
   };
 
@@ -772,6 +893,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
 
   const handleGenerateReport = async () => {
       if (!org || !user) return;
+      setReportStatusMessage(null);
       setIsGeneratingReport(true);
       try {
           const report = await ReportService.createReportRequest({
@@ -785,57 +907,99 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
           
           // Trigger sync immediately to start processing
           triggerSyncNow();
+          setReportStatusMessage({
+            tone: 'info',
+            text: 'Report request queued. UnitFlip is generating a fresh handoff report now.',
+          });
       } catch (e) {
           console.error(e);
-          alert('Failed to request report generation');
+          setReportStatusMessage({
+            tone: 'error',
+            text: 'Failed to request report generation. Check your connection and try again.',
+          });
       } finally {
           setIsGeneratingReport(false);
       }
   };
 
   const handleCreateShareLink = async () => {
-    if (!org || !user || !latestReport) return;
+    if (!org || !user || !latestReport || !role) return;
+    setShareStatusMessage(null);
     setIsCreatingLink(true);
     try {
         const link = await ShareLinkService.createLink({
             orgId: org.id,
             userId: user.id,
-            role: 'manager', // Hardcoded for MVP as we don't have full role context in AppContext yet, but service checks it. Assuming 'manager' for now or we need to pass actual role.
+            role: role as Role,
             reportId: latestReport.id,
             inspectionId,
-            expiresAt: Date.now() + expiryDays * 24 * 60 * 60 * 1000
+            expiresAt: Date.now() + expiryDays * 24 * 60 * 60 * 1000,
+            resourceBucket: latestReport.pdf?.bucket,
+            resourcePath: latestReport.pdf?.path,
+            resourceContentType: 'text/html; charset=utf-8',
+            resourceLabel: inspection?.title || 'Inspection report',
         });
         setShareLinks(prev => [link, ...prev]);
         log('SHARE_LINK_CREATED', { entityId: inspectionId, metadata: { token: link.token } });
+        setShareStatusMessage({
+          tone: 'success',
+          text: `Public link created. It will stay active until ${new Date(link.expiresAt).toLocaleDateString()}.`,
+        });
     } catch (e) {
         console.error(e);
-        alert('Failed to create share link. Ensure you have permission.');
+        setShareStatusMessage({
+          tone: 'error',
+          text: 'Failed to create a public link. Make sure the report is ready and your role can manage share links.',
+        });
     } finally {
         setIsCreatingLink(false);
     }
   };
 
   const handleRevokeLink = async (token: string) => {
-      if (!org || !user || !confirm('Revoke this share link? It will no longer be accessible.')) return;
+      if (!org || !user || !role || !confirm('Revoke this share link? It will no longer be accessible.')) return;
+      setShareStatusMessage(null);
+      setRevokingToken(token);
       try {
           await ShareLinkService.revokeLink({
               orgId: org.id,
               userId: user.id,
-              role: 'manager', // Assuming manager
+              role: role as Role,
               token
           });
-          setShareLinks(prev => prev.map(l => l.token === token ? { ...l, revokedAt: Date.now() } : l));
+          const revokedAt = Date.now();
+          setShareLinks(prev => prev.map(l => l.token === token ? { ...l, revokedAt } : l));
           log('SHARE_LINK_REVOKED', { entityId: inspectionId, metadata: { token } });
+          setShareStatusMessage({
+            tone: 'info',
+            text: 'Public link revoked. Anyone using the old URL will now see a revoked state.',
+          });
       } catch (e) {
           console.error(e);
-          alert('Failed to revoke link');
+          setShareStatusMessage({
+            tone: 'error',
+            text: 'Failed to revoke the public link. Try again once the network connection is stable.',
+          });
+      } finally {
+          setRevokingToken(null);
       }
   };
 
-  const copyToClipboard = (token: string) => {
+  const copyToClipboard = async (token: string) => {
       const url = `${window.location.origin}/share/${token}`;
-      navigator.clipboard.writeText(url);
-      alert('Link copied to clipboard!');
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareStatusMessage({
+          tone: 'success',
+          text: 'Public link copied to the clipboard.',
+        });
+      } catch (error) {
+        console.error(error);
+        setShareStatusMessage({
+          tone: 'error',
+          text: 'Failed to copy the public link. Copy it manually from the browser address bar.',
+        });
+      }
   };
 
   const handleGeneratedItemStatusChange = (
@@ -903,6 +1067,177 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
             }
       )
     );
+  };
+
+  const handleGeneratedItemInputValueChange = (
+    sectionId: string,
+    itemId: string,
+    updater: (current: GeneratedInspectionItem['inputValue']) => GeneratedInspectionItem['inputValue']
+  ) => {
+    setGeneratedSections((prev) =>
+      prev.map((section) =>
+        section.id !== sectionId
+          ? section
+          : {
+              ...section,
+              items: section.items.map((item) =>
+                item.id !== itemId
+                  ? item
+                  : {
+                      ...item,
+                      inputValue: updater(item.inputValue),
+                      updatedAt: Date.now(),
+                    }
+              ),
+            }
+      )
+    );
+  };
+
+  const persistInspectionSections = async (nextSections: GeneratedInspectionSection[]) => {
+    if (!org || !user || !inspection) return;
+    const updated = {
+      ...inspection,
+      title,
+      status,
+      notes,
+      generatedSections: nextSections,
+      generatedItems: nextSections.flatMap((section) => section.items),
+    };
+    await InspectionService.updateInspection(org.id, updated, user.id);
+    setInspection(updated);
+  };
+
+  const commitAlwaysReplaceItem = async (
+    section: GeneratedInspectionSection,
+    item: GeneratedInspectionItem,
+    options?: { collapse?: boolean; checklistMessage?: string; bridgeMessage?: string; focusMaterial?: boolean }
+  ) => {
+    if (!org || !user || !inspection) return;
+
+    try {
+      const existingRequirementCandidates = await MaterialRequirementService.listRequirements(org.id, { inspectionId: inspection.id });
+      const existingRequirement =
+        (item.materialRequirementIds || [])
+          .map((id) => existingRequirementCandidates.find((entry) => entry.id === id) || null)
+          .find(Boolean) ||
+        existingRequirementCandidates.find((entry) => entry.sourceGeneratedItemId === item.id) ||
+        null;
+      const existingTask =
+        (item.repairTaskIds || []).map((id) => repairTasks.find((entry) => entry.id === id) || null).find(Boolean) ||
+        repairTasks.find((entry) => entry.metadata?.sourceGeneratedItemId === item.id) ||
+        null;
+
+      const committed = await ChecklistAlwaysReplaceService.commitItem({
+        orgId: org.id,
+        userId: user.id,
+        inspectionId: inspection.id,
+        unitId: inspection.unitId,
+        section,
+        item,
+        existingTask,
+        existingRequirement,
+      });
+
+      const nextSections = generatedSections.map((entry) =>
+        entry.id !== section.id
+          ? entry
+          : {
+              ...entry,
+              items: entry.items.map((listItem) =>
+                listItem.id !== item.id
+                  ? listItem
+                  : {
+                      ...listItem,
+                      inputValue: item.inputValue,
+                      status: 'completed',
+                      repairTaskIds: Array.from(new Set([...(listItem.repairTaskIds || []), committed.task.id])),
+                      materialRequirementIds: Array.from(new Set([...(listItem.materialRequirementIds || []), committed.requirement.id])),
+                      updatedAt: Date.now(),
+                    }
+              ),
+            }
+      );
+
+      setGeneratedSections(nextSections);
+      setRepairTasks((current) => {
+        const others = current.filter((entry) => entry.id !== committed.task.id);
+        return [committed.task, ...others];
+      });
+      await persistInspectionSections(nextSections);
+      setMaterialRequirements((current) => {
+        const others = current.filter((entry) => entry.id !== committed.requirement.id);
+        return [committed.requirement, ...others];
+      });
+      setChecklistMessage(options?.checklistMessage || 'Always-replace item saved directly into repair tasks and material requirements.');
+      setCaptureBridgeMessage(
+        options?.bridgeMessage || 'Turnover standard saved without creating a finding. Open the generated material requirement or repair task when you are ready.'
+      );
+      setCaptureBridgeTarget({ entityType: 'task', entityId: committed.task.id });
+      if (options?.focusMaterial !== false) {
+        setFocusedScopeRecord(createFocusedScopeRecord('material', committed.requirement.id, 'Created from always-replace checklist item'));
+      }
+      if (options?.collapse !== false) {
+        setExpandedChecklistItemId(null);
+      }
+      setActiveChecklistDraftItemId(null);
+    } catch (error) {
+      console.error(error);
+      setChecklistMessage(error instanceof Error ? error.message : 'Failed to save the always-replace item.');
+    }
+  };
+
+  const handleAlwaysReplaceSave = async (sectionId: string, itemId: string) => {
+    if (!org || !user || !inspection) return;
+
+    const section = generatedSections.find((entry) => entry.id === sectionId);
+    const item = section?.items.find((entry) => entry.id === itemId);
+    if (!section || !item) {
+      setChecklistMessage('The selected checklist item could not be found.');
+      return;
+    }
+
+    if (!isAlwaysReplaceChecklistItem(item)) {
+      setChecklistMessage('Only always-replace checklist items can use this direct save path.');
+      return;
+    }
+
+    await commitAlwaysReplaceItem(section, item);
+  };
+
+  const handleAlwaysReplaceQuantityCommit = async (sectionId: string, itemId: string, quantity: number) => {
+    if (!org || !user || !inspection) return;
+
+    const section = generatedSections.find((entry) => entry.id === sectionId);
+    const item = section?.items.find((entry) => entry.id === itemId);
+    if (!section || !item) {
+      setChecklistMessage('The selected checklist item could not be found.');
+      return;
+    }
+
+    if (!isAlwaysReplaceChecklistItem(item) || item.inputMode !== 'count') {
+      setChecklistMessage('Only count-based always-replace checklist items can use quantity controls.');
+      return;
+    }
+
+    const nextQuantity = Math.max(1, Math.round(Number(quantity)) || 1);
+    const itemWithQuantity: GeneratedInspectionItem = {
+      ...item,
+      status: 'completed',
+      inputValue: {
+        ...(item.inputValue || {}),
+        quantity: nextQuantity,
+        updatedAt: Date.now(),
+      },
+      updatedAt: Date.now(),
+    };
+
+    await commitAlwaysReplaceItem(section, itemWithQuantity, {
+      collapse: false,
+      focusMaterial: false,
+      checklistMessage: `${item.label} quantity saved to materials.`,
+      bridgeMessage: 'Standard quantity saved without creating a finding.',
+    });
   };
 
   const handleCreateFindingFromChecklistItem = async (sectionId: string, itemId: string) => {
@@ -1430,7 +1765,6 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
         },
       })
     );
-    setExpandedChecklistItemId(item.id);
     setActiveChecklistDraftItemId(item.id);
     setChecklistDraftsByItemId((prev) => {
       const existing = prev[item.id];
@@ -1567,7 +1901,6 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
         const currentIndex = checklistItems.findIndex((entry) => entry.item.id === item.id);
         const nextEntry = currentIndex >= 0 ? checklistItems[currentIndex + 1] : undefined;
         if (nextEntry) {
-          setExpandedChecklistItemId(nextEntry.item.id);
           setActiveChecklistDraftItemId(nextEntry.item.id);
           setChecklistDraftsByItemId((prev) => ({
             ...prev,
@@ -2394,9 +2727,41 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
     });
   };
 
+  const resolvedProcurementBundles = useMemo(
+    () =>
+      inspection
+        ? ProcurementBundleService.resolveForInspection({
+            inspection: {
+              ...inspection,
+              generatedSections,
+              generatedItems: generatedSections.flatMap((section) => section.items),
+            },
+            requirements: materialRequirements,
+          })
+        : [],
+    [inspection, generatedSections, materialRequirements]
+  );
+  const resolvedBundleProductRecommendations = useMemo(
+    () =>
+      inspection
+        ? ProcurementProductResolutionService.resolveForBundlesFromCatalog({
+            catalogItems: catalogLibrary,
+            bundles: resolvedProcurementBundles,
+            inspections: [
+              {
+                ...inspection,
+                generatedSections,
+                generatedItems: generatedSections.flatMap((section) => section.items),
+              },
+            ],
+          })
+        : [],
+    [inspection, catalogLibrary, resolvedProcurementBundles, generatedSections]
+  );
+
   if (!inspection) return null;
 
-  const checklistSummary = createInspectionOperationalSummary(
+  const operationalSummary = createInspectionOperationalSummary(
     {
       ...inspection,
       generatedSections,
@@ -2404,8 +2769,50 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
     },
     findings,
     repairTasks,
-    []
-  ).checklist;
+    materialRequirements
+  );
+  const checklistSummary = operationalSummary.checklist;
+  const canRequestReport =
+    Boolean(flags?.pdf_reports) &&
+    (inspection.status === 'in_progress' || inspection.status === 'completed' || operationalSummary.scopeReadiness.stage === 'ready_for_report');
+  const reportActionDisabledReason = !flags?.pdf_reports
+    ? 'Report generation is currently turned off for this organization. Enable PDF reports in feature flags to use this handoff action.'
+    : inspection.status === 'draft' && operationalSummary.scopeReadiness.stage !== 'ready_for_report'
+      ? 'Move the inspection forward or finish findings, tasks, and materials before generating a handoff report.'
+      : inspection.status === 'draft'
+        ? 'This inspection is still marked Draft. Move it to In Progress or Completed if you want a finalized handoff report.'
+        : null;
+  const generatedSnapshotEntries: GeneratedSnapshotEntry[] = generatedSections.flatMap((section) =>
+    section.items.map((item) => {
+      const hasProcurementImpact =
+        (item.materialRequirementIds?.length || 0) > 0 ||
+        (item.repairTaskIds?.length || 0) > 0 ||
+        isAlwaysReplaceChecklistItem(item) ||
+        item.focusedAction === 'replace' ||
+        item.focusedAction === 'repair';
+      const alwaysReplaceInputComplete = isAlwaysReplaceInputComplete(item);
+      const isComplete = item.status === 'completed' || item.status === 'not_applicable' || alwaysReplaceInputComplete;
+      const needsAttention =
+        !alwaysReplaceInputComplete &&
+        (item.status === 'failed' ||
+          item.status === 'blocked' ||
+          item.status === 'in_progress' ||
+          item.status === 'not_started');
+      return {
+        section,
+        item,
+        hasProcurementImpact,
+        isComplete,
+        needsAttention,
+      };
+    })
+  );
+  const snapshotAttentionEntries = generatedSnapshotEntries.filter((entry) => entry.needsAttention);
+  const snapshotProcurementEntries = generatedSnapshotEntries.filter((entry) => entry.hasProcurementImpact);
+  const snapshotCompletedEntries = generatedSnapshotEntries.filter((entry) => entry.isComplete);
+  const unitContextLabel = unitRecord?.name || 'Unit';
+  const propertyContextLabel =
+    unitRecord?.buildingName || unitRecord?.facilityName || unitRecord?.address?.propertyName || null;
 
   const roomMap = new Map<string, InspectionWorkspaceRoom>();
 
@@ -2483,13 +2890,23 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
     return normalizeRoomKey(section.roomLabel || section.title) === normalizeRoomKey(currentRoom.label);
   });
 
-  const roomChecklistEntries = currentRoomChecklistSections.flatMap((section) =>
+  const roomChecklistEntries: RoomChecklistEntry[] = currentRoomChecklistSections.flatMap((section) =>
     section.items.map((item) => {
       const hasUnsavedDraft = Boolean(checklistDraftsByItemId[item.id]);
-      const isCompleted = item.status === 'completed';
+      const alwaysReplaceInputComplete = isAlwaysReplaceInputComplete(item);
+      const isCompleted = item.status === 'completed' || alwaysReplaceInputComplete;
+      const hasAlwaysReplaceScope =
+        isAlwaysReplaceChecklistItem(item) &&
+        alwaysReplaceInputComplete;
       const hasCommittedCapture =
         !hasUnsavedDraft &&
-        ((item.findingIds?.length || 0) > 0 || item.photoIds.length > 0 || item.status === 'failed' || item.status === 'blocked');
+        (
+          hasAlwaysReplaceScope ||
+          (item.findingIds?.length || 0) > 0 ||
+          item.photoIds.length > 0 ||
+          item.status === 'failed' ||
+          item.status === 'blocked'
+        );
       const needsAttention = hasUnsavedDraft || (!isCompleted && !hasCommittedCapture);
       const rowState = hasUnsavedDraft
         ? 'draft'
@@ -2534,6 +2951,31 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
         .map((entry) => entry.item),
     }))
     .filter((section) => section.items.length > 0);
+
+  const groupedRoomChecklistEntries = {
+    attention: filteredRoomChecklistEntries
+      .filter((entry) => getRoomChecklistIntentGroup(entry) === 'attention')
+      .sort((left, right) => {
+        const weightDelta = getRoomChecklistEntrySortWeight(left) - getRoomChecklistEntrySortWeight(right);
+        if (weightDelta !== 0) return weightDelta;
+        return left.item.order - right.item.order;
+      }),
+    progress: filteredRoomChecklistEntries
+      .filter((entry) => getRoomChecklistIntentGroup(entry) === 'progress')
+      .sort((left, right) => left.item.order - right.item.order),
+    done: filteredRoomChecklistEntries
+      .filter((entry) => getRoomChecklistIntentGroup(entry) === 'done')
+      .sort((left, right) => left.item.order - right.item.order),
+  };
+
+  const checklistNextStepMessage =
+    roomChecklistSummary.unsavedDraftCount > 0
+      ? `Finish ${roomChecklistSummary.unsavedDraftCount} unsaved draft${roomChecklistSummary.unsavedDraftCount === 1 ? '' : 's'} before leaving this room.`
+      : roomChecklistSummary.needsAttentionCount > 0
+        ? `Start with the ${roomChecklistSummary.needsAttentionCount} item${roomChecklistSummary.needsAttentionCount === 1 ? '' : 's'} that still need attention in this room.`
+        : roomChecklistSummary.capturedCount > 0
+          ? 'Captured work is ready for follow-up. Review linked findings, tasks, or materials next.'
+          : 'This room is in good shape. Review completed items and move on when ready.';
 
   const firstRoomDraftEntry = roomChecklistEntries.find((entry) => entry.hasUnsavedDraft);
 
@@ -2715,7 +3157,6 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
   const handleJumpToDrafts = () => {
     if (!firstRoomDraftEntry) return;
     setChecklistAttentionFilter('drafts');
-    setExpandedChecklistItemId(firstRoomDraftEntry.item.id);
     setActiveChecklistDraftItemId(firstRoomDraftEntry.item.id);
   };
 
@@ -2728,31 +3169,355 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
     setEditingFeedDraft(null);
   };
 
+  const sectionActionRowClass = 'flex flex-wrap items-center gap-2';
+  const primaryActionButtonClass =
+    'inline-flex items-center justify-center gap-2 rounded-lg bg-lowes-blue px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50';
+  const secondaryActionButtonClass =
+    'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40';
+  const quietActionButtonClass =
+    'inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50';
+  const sectionEmptyStateClass = 'rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600';
+  const activeChecklistDraftSection = currentChecklistDraft
+    ? currentRoomChecklistSections.find((section) => section.id === currentChecklistDraft.sectionId)
+    : null;
+  const activeChecklistDraftItem = activeChecklistDraftSection && currentChecklistDraft
+    ? activeChecklistDraftSection.items.find((item) => item.id === currentChecklistDraft.itemId)
+    : null;
+  const activeChecklistCaptureStrip = currentChecklistDraft && activeChecklistDraftItem ? (
+    <div className="mb-3 rounded-xl border border-lowes-blue bg-blue-50 p-3 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-blue-700">Active capture</div>
+          <h4 className="mt-1 text-sm font-semibold text-slate-900">{activeChecklistDraftItem.label}</h4>
+          <p className="mt-1 text-xs text-slate-600">
+            Save updates this row immediately. Photos are optional.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-800">
+            {titleCase(currentChecklistDraft.selectedAction === 'note' ? 'issue' : currentChecklistDraft.selectedAction)}
+          </span>
+          {currentChecklistDraft.stagedPhotos.length > 0 ? (
+            <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-sky-800">
+              {currentChecklistDraft.stagedPhotos.length} photo{currentChecklistDraft.stagedPhotos.length === 1 ? '' : 's'}
+            </span>
+          ) : null}
+          <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+            Unsaved
+          </span>
+        </div>
+      </div>
+
+      {currentChecklistDraft.stagedPhotoRestoreNoticeCount > 0 ? (
+        <div className="mt-3 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-900">
+          Local staged photos from a previous session could not be restored.
+          {currentChecklistDraft.stagedPhotoRestoreNoticeNames.length > 0
+            ? ` Reattach: ${currentChecklistDraft.stagedPhotoRestoreNoticeNames.join(', ')}.`
+            : ' Reattach photos before saving if they are still needed.'}
+        </div>
+      ) : null}
+
+      <div className="mt-3 grid gap-3 md:grid-cols-[180px_120px_minmax(0,1fr)]">
+        <label className="text-sm text-slate-700">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-blue-700">Action</span>
+          <select
+            value={currentChecklistDraft.selectedAction}
+            onChange={(event) =>
+              upsertChecklistDraft(currentChecklistDraft.itemId, (draft) => ({
+                ...draft,
+                selectedAction: event.target.value as ChecklistDraftCaptureState['selectedAction'],
+              }))
+            }
+            className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 outline-none focus:border-lowes-blue"
+          >
+            <option value="repair">Repair</option>
+            <option value="replace">Replace</option>
+            <option value="note">Add Issue</option>
+            <option value="missing">Missing</option>
+            <option value="photo">Photo Note</option>
+          </select>
+        </label>
+
+        <label className="text-sm text-slate-700">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-blue-700">Quantity</span>
+          <input
+            type="number"
+            min={0}
+            value={currentChecklistDraft.quantity}
+            onChange={(event) =>
+              upsertChecklistDraft(currentChecklistDraft.itemId, (draft) => ({
+                ...draft,
+                quantity: event.target.value,
+              }))
+            }
+            className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 outline-none focus:border-lowes-blue"
+          />
+        </label>
+
+        <label className="text-sm text-slate-700">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-blue-700">Issue label</span>
+          <input
+            type="text"
+            value={currentChecklistDraft.label}
+            onChange={(event) =>
+              upsertChecklistDraft(currentChecklistDraft.itemId, (draft) => ({
+                ...draft,
+                label: event.target.value,
+              }))
+            }
+            className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 outline-none focus:border-lowes-blue"
+          />
+        </label>
+
+        <label className="text-sm text-slate-700 md:col-span-3">
+          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-blue-700">Optional note</span>
+          <textarea
+            rows={2}
+            value={currentChecklistDraft.notes}
+            onChange={(event) =>
+              upsertChecklistDraft(currentChecklistDraft.itemId, (draft) => ({
+                ...draft,
+                notes: event.target.value,
+              }))
+            }
+            placeholder="Add only what the next person needs to know"
+            className="w-full rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm outline-none focus:border-lowes-blue"
+          />
+        </label>
+      </div>
+
+      {currentChecklistDraft.stagedPhotos.length > 0 ? (
+        <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
+          {currentChecklistDraft.stagedPhotos.map((photo) => (
+            <div key={photo.id} className="rounded-xl border border-blue-100 bg-white p-2">
+              <div className="relative aspect-square overflow-hidden rounded-lg bg-slate-100">
+                <img src={photo.previewUrl} alt="Draft preview" className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() =>
+                    upsertChecklistDraft(currentChecklistDraft.itemId, (draft) => {
+                      const target = draft.stagedPhotos.find((entry) => entry.id === photo.id);
+                      if (target) {
+                        URL.revokeObjectURL(target.previewUrl);
+                      }
+                      return {
+                        ...draft,
+                        stagedPhotos: draft.stagedPhotos.filter((entry) => entry.id !== photo.id),
+                      };
+                    })
+                  }
+                  className="absolute right-1 top-1 rounded-full bg-black/70 p-1 text-white"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+              <div className="mt-2 text-[11px] font-medium text-blue-700">Local until save</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-blue-100 pt-3">
+        <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-800">
+          <Camera size={14} />
+          Add Photo
+          <input
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                const previewUrl = URL.createObjectURL(file);
+                upsertChecklistDraft(currentChecklistDraft.itemId, (draft) => ({
+                  ...draft,
+                  stagedPhotos: [
+                    ...draft.stagedPhotos,
+                    {
+                      id: createChecklistPhotoDraftId(),
+                      file,
+                      previewUrl,
+                    },
+                  ],
+                }));
+              }
+              event.target.value = '';
+            }}
+          />
+        </label>
+        <div className={sectionActionRowClass}>
+          <button type="button" onClick={() => void handleChecklistDraftSave('save')} className={primaryActionButtonClass}>
+            Save Capture
+          </button>
+          <button type="button" onClick={() => void handleChecklistDraftSave('save_next')} className={secondaryActionButtonClass}>
+            Save & Next
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              ClientLoggerService.info(
+                'Checklist draft canceled.',
+                buildInspectionLogContext({
+                  eventType: 'inspection.checklist.cancel_draft',
+                  checklistItemId: currentChecklistDraft.itemId,
+                  checklistSectionId: currentChecklistDraft.sectionId,
+                  metadata: {
+                    selectedAction: currentChecklistDraft.selectedAction,
+                    stagedPhotoCount: currentChecklistDraft.stagedPhotos.length,
+                  },
+                })
+              );
+              clearChecklistDraft(currentChecklistDraft.itemId);
+              setActiveChecklistDraftItemId(null);
+              setExpandedChecklistItemId(null);
+            }}
+            className={quietActionButtonClass}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+  const currentRoomAttentionCount = currentRoomFeedItems.filter((item) => {
+    const status = (item.statusLabel || '').toLowerCase();
+    const priority = (item.priorityLabel || '').toLowerCase();
+    return status.includes('blocked') || status.includes('failed') || priority.includes('high') || priority.includes('urgent') || item.type === 'missing';
+  }).length;
+  const currentRoomFollowUpCount = currentRoomFeedItems.filter(
+    (item) => item.entityType === 'task' || item.type === 'repair' || item.type === 'replace' || item.type === 'task'
+  ).length;
+  const roomSavedStateSummary = (
+    <section className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-800">Room saved scope</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Row badges are the primary status signal. Open review only when you need saved details.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-1.5 text-xs font-semibold">
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-700">{currentRoomFeedItems.length} saved</span>
+          {currentRoomAttentionCount > 0 ? (
+            <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-800">{currentRoomAttentionCount} attention</span>
+          ) : null}
+          {currentRoomFollowUpCount > 0 ? (
+            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-800">{currentRoomFollowUpCount} follow-up</span>
+          ) : null}
+        </div>
+      </div>
+      {currentRoomFeedItems.length > 0 ? (
+        <details className="mt-2 rounded-lg border border-slate-100 bg-slate-50">
+          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-semibold text-slate-600">
+            Optional saved-detail review
+          </summary>
+          <div className="border-t border-slate-100 p-3">
+            <ErrorBoundary
+              surfaceName="captured-items-feed"
+              screenName="InspectionDetail"
+              contextIds={{
+                orgId: org?.id,
+                inspectionId,
+                roomId: selectedRoomId || undefined,
+                checklistItemId: editingFeedDraft?.checklistContext?.checklistItemId,
+              }}
+              resetKeys={[inspectionId, selectedRoomId, expandedFeedItemId, editingFeedDraft?.existingEntityId]}
+              onReturn={handleCancelFeedEdit}
+              returnLabel="Close Feed Editor"
+            >
+              <RoomCapturedItemsFeed
+                items={currentRoomFeedItems}
+                roomOptions={roomOptions}
+                editingDraft={editingFeedDraft}
+                expandedItemId={expandedFeedItemId}
+                photoPreviewUrls={previews}
+                stagedPhotos={feedEditStagedPhotos.map((photo) => ({
+                  id: photo.id,
+                  previewUrl: photo.previewUrl,
+                  fileName: photo.file.name,
+                }))}
+                pendingRemovedPhotoIds={feedEditPendingRemovedPhotoIds}
+                saveState={feedEditSaveState}
+                isSaving={isFeedEditSaveBusy}
+                onToggleExpand={handleToggleFeedItem}
+                onDraftChange={handleFeedDraftChange}
+                onStagePhoto={handleStageFeedEditPhoto}
+                onRemoveStagedPhoto={handleRemoveFeedEditStagedPhoto}
+                onToggleSavedPhotoRemoval={handleToggleSavedFeedEditPhotoRemoval}
+                onSaveDraft={handleSaveFeedDraft}
+                onCancelEdit={handleCancelFeedEdit}
+                onDeleteItem={handleDeleteFeedItem}
+                recommendationPanel={feedRecommendationPanel}
+              />
+            </ErrorBoundary>
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between sticky top-0 bg-slate-50 py-4 z-10">
-        <div className="flex items-center gap-4">
-            <button onClick={handleProtectedBack} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
-            <ArrowLeft size={20} className="text-slate-600" />
+      <div
+        data-testid="inspection-detail-header"
+        className="sticky top-0 z-10 rounded-2xl border border-slate-200 bg-white/95 px-5 py-4 shadow-sm backdrop-blur"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex min-w-0 items-start gap-4">
+            <button onClick={handleProtectedBack} className="rounded-full p-2 transition-colors hover:bg-slate-100">
+              <ArrowLeft size={20} className="text-slate-600" />
             </button>
-            <div>
-              <h2 className="text-xl font-bold text-slate-800">Edit Inspection</h2>
-              {originContextLabel ? (
-                <div className="mt-1 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-800">
-                  {originContextLabel}
-                </div>
-              ) : null}
+            <div className="min-w-0">
+              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Inspection detail</div>
+              <h2 className="mt-1 truncate text-2xl font-bold text-slate-900">{title || 'Inspection'}</h2>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                  {unitContextLabel}
+                </span>
+                {propertyContextLabel ? (
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                    {propertyContextLabel}
+                  </span>
+                ) : null}
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${inspectionStatusBadgeClass(status)}`}>
+                  {titleCase(status)}
+                </span>
+                {inspection.templateSnapshot?.turnoverPresetLabel ? (
+                  <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
+                    Preset: {inspection.templateSnapshot.turnoverPresetLabel}
+                  </span>
+                ) : null}
+                {inspection.templateSnapshot?.appliedScopedOverrideIds?.length ? (
+                  <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+                    Overrides: {inspection.templateSnapshot.appliedScopedOverrideIds.length}
+                  </span>
+                ) : null}
+                {originContextLabel ? (
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">
+                    {originContextLabel}
+                  </span>
+                ) : null}
+              </div>
             </div>
+          </div>
+          <div className="flex flex-col items-stretch gap-3 sm:items-end">
+            <div className="flex flex-wrap gap-2 text-xs font-semibold">
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-700">{checklistSummary.completedCount}/{checklistSummary.total} complete</span>
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-800">{checklistSummary.failedCount + checklistSummary.blockedCount} blocked or failed</span>
+              <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-800">{materialRequirements.length} materials</span>
+            </div>
+            <button
+              onClick={handleSave}
+              disabled={isSaving}
+              className={`${primaryActionButtonClass} px-6`}
+            >
+              {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+              Save Changes
+            </button>
+          </div>
         </div>
-        <button
-            onClick={handleSave}
-            disabled={isSaving}
-            className="bg-lowes-blue text-white px-6 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 transition-colors disabled:opacity-50"
-        >
-            {isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-            Save Changes
-        </button>
       </div>
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 space-y-6">
@@ -2785,7 +3550,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                         )
                       )
                     }
-                    className="mt-3 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
+                    className="mt-3 inline-flex items-center justify-center rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-semibold text-emerald-800 transition-colors hover:bg-emerald-100"
                   >
                     Open created {captureBridgeTarget.entityType === 'task' ? 'repair task' : captureBridgeTarget.entityType}
                   </button>
@@ -2832,7 +3597,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
               <div className="mb-3 flex items-center justify-between">
                 <div>
                   <h3 className="text-base font-semibold text-slate-900">Room Checklist</h3>
-                  <p className="text-sm text-slate-500">Operational checklist for the current room. Failed or blocked items can turn directly into structured findings.</p>
+                  <p className="text-sm text-slate-500">Operational checklist for the current room. Condition issues can become findings, while always-replace standards can go straight to tasks and materials.</p>
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   {hasUnsavedChecklistDrafts ? (
@@ -2847,8 +3612,11 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
               </div>
 
               {currentRoomChecklistSections.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                  No generated checklist items are mapped to this room yet.
+                <div className={sectionEmptyStateClass}>
+                  <div className="font-medium text-slate-700">No generated room checklist yet.</div>
+                  <div className="mt-1">
+                    This is normal when the selected room has no mapped checklist items in the current template. Choose another room, or review template coverage if work should appear here.
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -2871,9 +3639,12 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                     </div>
                   </div>
 
-                  <p className="text-xs text-slate-500">
-                    Good means complete, Unsaved Draft stays local until save, and Captured means the item already has a saved record.
-                  </p>
+                  <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">What to do next</div>
+                    <p className="mt-1 text-sm text-slate-600">{checklistNextStepMessage}</p>
+                  </div>
+
+                  {activeChecklistCaptureStrip}
 
                   <div className="flex flex-wrap items-center gap-2">
                     {([
@@ -2907,55 +3678,116 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                   </div>
 
                   {filteredChecklistSections.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-                      No checklist items match the current filter.
+                    <div className={sectionEmptyStateClass}>
+                      <div className="font-medium text-slate-700">Nothing matches this checklist filter.</div>
+                      <div className="mt-1">
+                        Try <span className="font-medium text-slate-700">All</span> to review the full room list, or switch back to <span className="font-medium text-slate-700">Needs Attention</span> to focus on active work.
+                      </div>
                     </div>
                   ) : null}
 
-                  {filteredChecklistSections.map((section) => (
-                    <div key={section.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <div>
-                          <h4 className="text-sm font-semibold text-slate-800">{section.title}</h4>
-                          {section.roomType ? (
-                            <p className="text-xs text-slate-500">{titleCase(section.roomType)}</p>
-                          ) : null}
-                        </div>
-                        <span className="text-xs text-slate-500">{section.items.length} items</span>
-                      </div>
-                      <div className="space-y-2">
-                        {section.items.map((item) => {
-                          const roomChecklistEntry = roomChecklistEntries.find((entry) => entry.item.id === item.id);
+                  {([
+                    {
+                      id: 'attention',
+                      title: 'Needs Attention',
+                      detail: 'Start here. These items are still untouched, failed, blocked, or saved only as local drafts.',
+                      tone: 'border-amber-200 bg-amber-50',
+                      entries: groupedRoomChecklistEntries.attention,
+                    },
+                    {
+                      id: 'progress',
+                      title: 'In Progress',
+                      detail: 'These items already have captured scope and are ready for review or downstream follow-up.',
+                      tone: 'border-blue-200 bg-blue-50',
+                      entries: groupedRoomChecklistEntries.progress,
+                    },
+                    {
+                      id: 'done',
+                      title: 'Completed / Good',
+                      detail: 'Completed items stay visible here so the room can be reviewed without dominating the active work list.',
+                      tone: 'border-emerald-200 bg-emerald-50',
+                      entries: groupedRoomChecklistEntries.done,
+                    },
+                  ] as Array<{
+                    id: RoomChecklistIntentGroupId;
+                    title: string;
+                    detail: string;
+                    tone: string;
+                    entries: RoomChecklistEntry[];
+                  }>).map((group) => {
+                    if (group.entries.length === 0) return null;
+                    const GroupWrapper: React.ElementType = group.id === 'done' ? 'details' : 'div';
+                    const groupWrapperProps =
+                      group.id === 'done'
+                        ? { className: `rounded-xl border p-3 ${group.tone}`, open: checklistAttentionFilter === 'done' }
+                        : { className: `rounded-xl border p-3 ${group.tone}` };
+                    return (
+                      <GroupWrapper key={group.id} {...groupWrapperProps}>
+                        {group.id === 'done' ? (
+                          <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+                            <div>
+                              <h4 className="text-sm font-semibold text-slate-900">{group.title}</h4>
+                              <p className="mt-1 text-xs text-slate-600">{group.detail}</p>
+                            </div>
+                            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                              {group.entries.length}
+                            </span>
+                          </summary>
+                        ) : (
+                          <div className="mb-3 flex items-start justify-between gap-3">
+                            <div>
+                              <h4 className="text-sm font-semibold text-slate-900">{group.title}</h4>
+                              <p className="mt-1 text-xs text-slate-600">{group.detail}</p>
+                            </div>
+                            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                              {group.entries.length}
+                            </span>
+                          </div>
+                        )}
+                        <div className={`space-y-2 ${group.id === 'done' ? 'mt-3' : ''}`}>
+                        {group.entries.map((roomChecklistEntry) => {
+                          const { item, section } = roomChecklistEntry;
+                          const isAlwaysReplace = isAlwaysReplaceChecklistItem(item);
                           const rowState = roomChecklistEntry?.rowState || 'untouched';
                           const rowStateLabel =
                             rowState === 'draft'
-                              ? 'Unsaved draft'
+                              ? 'Draft'
                               : rowState === 'completed'
-                                ? 'Good'
+                                ? isAlwaysReplace
+                                  ? 'Saved'
+                                  : 'Good'
                                 : rowState === 'captured'
-                                  ? 'Captured'
-                                  : 'Not started';
+                                  ? 'Saved'
+                                  : 'New';
                           const rowStateClass =
                             rowState === 'draft'
-                              ? 'border-amber-300 bg-amber-50/40'
+                              ? 'border-amber-200 bg-amber-50/40'
                               : rowState === 'completed'
-                                ? 'border-emerald-200 bg-emerald-50/40'
+                                ? 'border-emerald-100 bg-white'
                                 : rowState === 'captured'
-                                  ? 'border-blue-200 bg-blue-50/30'
+                                  ? 'border-blue-100 bg-white'
                                   : 'border-slate-200 bg-white';
+                          const isActiveChecklistRow = activeChecklistDraftItemId === item.id;
+                          const checklistGuidance = buildChecklistGuidance(item);
+                          const isAlwaysReplaceCount = isAlwaysReplace && item.inputMode === 'count';
+                          const alwaysReplaceQuantity = getAlwaysReplaceCountQuantity(item);
 
                           return (
                           <div
                             key={item.id}
                             className={`rounded-lg border transition-colors ${
-                              expandedChecklistItemId === item.id ? 'border-lowes-blue bg-white' : rowStateClass
+                              isActiveChecklistRow
+                                ? 'border-lowes-blue bg-blue-50/60 shadow-sm ring-1 ring-lowes-blue/30'
+                                : expandedChecklistItemId === item.id
+                                  ? 'border-lowes-blue bg-white'
+                                  : rowStateClass
                             }`}
                           >
                             <button
                               type="button"
                               onClick={() => {
                                 const isCurrentlyExpanded = expandedChecklistItemId === item.id;
-                                if (!isCurrentlyExpanded) {
+                                if (!isCurrentlyExpanded && isAlwaysReplace) {
                                   ClientLoggerService.info(
                                     'Checklist item opened.',
                                     buildInspectionLogContext({
@@ -2969,20 +3801,36 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                                     })
                                   );
                                 }
-                                setExpandedChecklistItemId((current) => (current === item.id ? null : item.id));
-                                if (isCurrentlyExpanded) {
-                                  setActiveChecklistDraftItemId(null);
-                                } else if (checklistDraftsByItemId[item.id]) {
+                                if (isAlwaysReplace) {
+                                  setExpandedChecklistItemId((current) => (current === item.id ? null : item.id));
+                                }
+                                if (!isAlwaysReplace && checklistDraftsByItemId[item.id]) {
                                   setActiveChecklistDraftItemId(item.id);
+                                } else if (!isAlwaysReplace && rowState !== 'untouched') {
+                                  handleChecklistStartDraft(
+                                    section,
+                                    item,
+                                    item.focusedAction === 'repair' || item.focusedAction === 'replace' ? item.focusedAction : 'repair'
+                                  );
                                 }
                               }}
                               className="flex w-full items-center justify-between gap-3 px-3 py-3 text-left"
                             >
                               <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-medium text-slate-800">{item.label}</p>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="truncate text-sm font-medium text-slate-800">{item.label}</p>
+                                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                                    {section.title}
+                                  </span>
+                                </div>
                                 <div className="mt-1 flex flex-wrap gap-1.5">
+                                  {isAlwaysReplace ? (
+                                    <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
+                                      Always replace
+                                    </span>
+                                  ) : null}
                                   <span
-                                    className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                                    className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                                       rowState === 'draft'
                                         ? 'bg-amber-100 text-amber-800'
                                         : rowState === 'completed'
@@ -2994,9 +3842,11 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                                   >
                                     {rowStateLabel}
                                   </span>
-                                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                                    {titleCase(item.status)}
-                                  </span>
+                                  {isAlwaysReplace ? (
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                                      {getAlwaysReplaceInputSummary(item)}
+                                    </span>
+                                  ) : null}
                                   {item.photoIds.length > 0 ? (
                                     <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">
                                       Photo {item.photoIds.length}
@@ -3004,29 +3854,288 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                                   ) : null}
                                   {checklistDraftsByItemId[item.id] ? (
                                     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                                      Unsaved draft
+                                      Local
                                     </span>
                                   ) : null}
-                                  {roomChecklistEntry?.hasCommittedCapture ? (
-                                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
-                                      Committed
-                                    </span>
-                                  ) : null}
-                                  {(item.findingIds?.length || 0) > 0 ? (
-                                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                                      Finding linked
+                                  {isActiveChecklistRow ? (
+                                    <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-800">
+                                      Editing
                                     </span>
                                   ) : null}
                                 </div>
+                                {checklistGuidance ? <p className="mt-2 text-xs text-slate-500">{checklistGuidance}</p> : null}
                               </div>
-                              <ChevronDown
-                                size={16}
-                                className={`text-slate-400 transition-transform ${expandedChecklistItemId === item.id ? 'rotate-180' : ''}`}
-                              />
+                              {isAlwaysReplace ? (
+                                <ChevronDown
+                                  size={16}
+                                  className={`text-slate-400 transition-transform ${expandedChecklistItemId === item.id ? 'rotate-180' : ''}`}
+                                />
+                              ) : null}
                             </button>
 
-                            {expandedChecklistItemId === item.id ? (
+                            {isAlwaysReplaceCount ? (
+                              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-3 py-2">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quantity</span>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    aria-label={`Decrease ${item.label} quantity`}
+                                    onClick={() => void handleAlwaysReplaceQuantityCommit(section.id, item.id, alwaysReplaceQuantity - 1)}
+                                    disabled={alwaysReplaceQuantity <= 1}
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                  >
+                                    <MinusCircle size={18} />
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    inputMode="numeric"
+                                    aria-label={`${item.label} quantity`}
+                                    value={alwaysReplaceQuantity}
+                                    onChange={(event) =>
+                                      handleGeneratedItemInputValueChange(section.id, item.id, (current) => ({
+                                        ...(current || {}),
+                                        quantity: Math.max(1, Math.round(Number(event.target.value || 1)) || 1),
+                                        updatedAt: Date.now(),
+                                      }))
+                                    }
+                                    onBlur={(event) => void handleAlwaysReplaceQuantityCommit(section.id, item.id, Number(event.target.value || 1))}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter') {
+                                        event.currentTarget.blur();
+                                      }
+                                    }}
+                                    className="h-10 w-20 rounded-lg border border-slate-200 bg-white text-center text-base font-semibold text-slate-900 outline-none focus:border-lowes-blue"
+                                  />
+                                  <button
+                                    type="button"
+                                    aria-label={`Increase ${item.label} quantity`}
+                                    onClick={() => void handleAlwaysReplaceQuantityCommit(section.id, item.id, alwaysReplaceQuantity + 1)}
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700"
+                                  >
+                                    <PlusCircle size={18} />
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
+
+                            {!isAlwaysReplace ? (
+                              <div className="flex flex-wrap gap-2 border-t border-slate-100 px-3 py-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleChecklistGood(section.id, item.id)}
+                                  className="rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700"
+                                >
+                                  <span className="flex items-center gap-1.5">
+                                    <CheckCircle2 size={14} />
+                                    Good
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleChecklistStartDraft(section, item, 'repair')}
+                                  className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                                    activeChecklistDraftItemId === item.id && currentChecklistDraft?.selectedAction === 'repair'
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-amber-50 text-amber-700'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-1.5">
+                                    <Wrench size={14} />
+                                    Repair
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleChecklistStartDraft(section, item, 'replace')}
+                                  className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                                    activeChecklistDraftItemId === item.id && currentChecklistDraft?.selectedAction === 'replace'
+                                      ? 'bg-blue-100 text-blue-800'
+                                      : 'bg-blue-50 text-blue-700'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-1.5">
+                                    <PackagePlus size={14} />
+                                    Replace
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleChecklistStartDraft(section, item, 'note')}
+                                  className={`rounded-lg px-3 py-2 text-xs font-semibold ${
+                                    activeChecklistDraftItemId === item.id && currentChecklistDraft?.selectedAction === 'note'
+                                      ? 'bg-slate-200 text-slate-800'
+                                      : 'border border-slate-200 bg-white text-slate-700'
+                                  }`}
+                                >
+                                  Add Issue
+                                </button>
+                              </div>
+                            ) : null}
+
+                            {isAlwaysReplace && expandedChecklistItemId === item.id ? (
                               <div className="border-t border-slate-100 px-3 py-3">
+                                {isAlwaysReplace ? (
+                                  <div className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/60 p-3">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="rounded-full bg-violet-700 px-2.5 py-1 text-[11px] font-semibold text-white">
+                                        Turnover standard
+                                      </span>
+                                      <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-violet-800">
+                                        {ChecklistAlwaysReplaceService.describeInput(item)}
+                                      </span>
+                                    </div>
+
+                                    <p className="text-xs text-slate-600">
+                                      This item does not create a finding. Enter the standard replacement input and save it directly into a repair task and material requirement.
+                                    </p>
+
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                      {item.inputMode === 'count' ? (
+                                        <label className="text-sm text-slate-700">
+                                          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Quantity</span>
+                                          <div className="relative">
+                                            <Hash size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                            <input
+                                              type="number"
+                                              min={1}
+                                              value={item.inputValue?.quantity ?? item.defaultQuantity ?? ''}
+                                              onChange={(event) =>
+                                                handleGeneratedItemInputValueChange(section.id, item.id, (current) => ({
+                                                  ...(current || {}),
+                                                  quantity: Math.max(1, Number(event.target.value || 0)) || undefined,
+                                                  updatedAt: Date.now(),
+                                                }))
+                                              }
+                                              className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 outline-none focus:border-lowes-blue"
+                                            />
+                                          </div>
+                                        </label>
+                                      ) : null}
+
+                                      {item.inputMode === 'dimensions' ? (
+                                        <>
+                                          <label className="text-sm text-slate-700">
+                                            <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Width</span>
+                                            <div className="relative">
+                                              <Ruler size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                step="0.1"
+                                                value={item.inputValue?.dimensions?.width ?? ''}
+                                                onChange={(event) =>
+                                                  handleGeneratedItemInputValueChange(section.id, item.id, (current) => ({
+                                                    ...(current || {}),
+                                                    dimensions: {
+                                                      width: Number(event.target.value || 0),
+                                                      height: current?.dimensions?.height || 0,
+                                                      unit: current?.dimensions?.unit || 'in',
+                                                    },
+                                                    updatedAt: Date.now(),
+                                                  }))
+                                                }
+                                                className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 outline-none focus:border-lowes-blue"
+                                              />
+                                            </div>
+                                          </label>
+                                          <label className="text-sm text-slate-700">
+                                            <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Height</span>
+                                            <div className="relative">
+                                              <Ruler size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                              <input
+                                                type="number"
+                                                min={0}
+                                                step="0.1"
+                                                value={item.inputValue?.dimensions?.height ?? ''}
+                                                onChange={(event) =>
+                                                  handleGeneratedItemInputValueChange(section.id, item.id, (current) => ({
+                                                    ...(current || {}),
+                                                    dimensions: {
+                                                      width: current?.dimensions?.width || 0,
+                                                      height: Number(event.target.value || 0),
+                                                      unit: current?.dimensions?.unit || 'in',
+                                                    },
+                                                    updatedAt: Date.now(),
+                                                  }))
+                                                }
+                                                className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 outline-none focus:border-lowes-blue"
+                                              />
+                                            </div>
+                                          </label>
+                                        </>
+                                      ) : null}
+
+                                      {item.inputMode === 'area' ? (
+                                        <label className="text-sm text-slate-700">
+                                          <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Area</span>
+                                          <div className="relative">
+                                            <Ruler size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                            <input
+                                              type="number"
+                                              min={0}
+                                              step="0.1"
+                                              value={item.inputValue?.area ?? ''}
+                                              onChange={(event) =>
+                                                handleGeneratedItemInputValueChange(section.id, item.id, (current) => ({
+                                                  ...(current || {}),
+                                                  area: Number(event.target.value || 0) || undefined,
+                                                  updatedAt: Date.now(),
+                                                }))
+                                              }
+                                              className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 outline-none focus:border-lowes-blue"
+                                            />
+                                          </div>
+                                        </label>
+                                      ) : null}
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleAlwaysReplaceSave(section.id, item.id)}
+                                        className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                                      >
+                                        {(item.materialRequirementIds?.length || 0) > 0 ? 'Update Standard' : 'Save Standard'}
+                                      </button>
+                                      {(item.materialRequirementIds?.length || 0) > 0 ? (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setFocusedScopeRecord(
+                                              createFocusedScopeRecord(
+                                                'material',
+                                                item.materialRequirementIds?.[0] || '',
+                                                'Opened from always-replace checklist row'
+                                              )
+                                            )
+                                          }
+                                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                                        >
+                                          Open Material
+                                        </button>
+                                      ) : null}
+                                      {(item.repairTaskIds?.length || 0) > 0 ? (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setFocusedScopeRecord(
+                                              createFocusedScopeRecord(
+                                                'task',
+                                                item.repairTaskIds?.[0] || '',
+                                                'Opened from always-replace checklist row'
+                                              )
+                                            )
+                                          }
+                                          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                                        >
+                                          Open Task
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                ) : (
+                                <>
                                 <div className="flex flex-wrap gap-2">
                                   <button
                                     type="button"
@@ -3267,18 +4376,22 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                                       </div>
                                     ) : null}
 
-                                    <div className="flex flex-wrap gap-2">
+                                    <div className="border-t border-slate-200 pt-3">
+                                      <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                                        Checklist actions
+                                      </div>
+                                      <div className={sectionActionRowClass}>
                                       <button
                                         type="button"
                                         onClick={() => void handleChecklistDraftSave('save')}
-                                        className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                                        className={primaryActionButtonClass}
                                       >
                                         Save Capture
                                       </button>
                                       <button
                                         type="button"
                                         onClick={() => void handleChecklistDraftSave('save_next')}
-                                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700"
+                                        className={secondaryActionButtonClass}
                                       >
                                         Save & Next
                                       </button>
@@ -3301,103 +4414,81 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                                           setActiveChecklistDraftItemId(null);
                                           setExpandedChecklistItemId(null);
                                         }}
-                                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700"
+                                        className={quietActionButtonClass}
                                       >
                                         Cancel
                                       </button>
+                                      </div>
                                     </div>
                                   </div>
                                 ) : null}
+                                </>
+                                )}
                               </div>
                             ) : null}
                           </div>
                         )})}
-                      </div>
-                    </div>
-                  ))}
+                        </div>
+                      </GroupWrapper>
+                    );
+                  })}
                 </div>
               )}
                 </section>
               }
-              feed={
-                <ErrorBoundary
-                  surfaceName="captured-items-feed"
-                  screenName="InspectionDetail"
-                  contextIds={{
-                    orgId: org?.id,
-                    inspectionId,
-                    roomId: selectedRoomId || undefined,
-                    checklistItemId: editingFeedDraft?.checklistContext?.checklistItemId,
-                  }}
-                  resetKeys={[inspectionId, selectedRoomId, expandedFeedItemId, editingFeedDraft?.existingEntityId]}
-                  onReturn={handleCancelFeedEdit}
-                  returnLabel="Close Feed Editor"
-                >
-                  <RoomCapturedItemsFeed
-                    items={currentRoomFeedItems}
-                    roomOptions={roomOptions}
-                    editingDraft={editingFeedDraft}
-                    expandedItemId={expandedFeedItemId}
-                    photoPreviewUrls={previews}
-                    stagedPhotos={feedEditStagedPhotos.map((photo) => ({
-                      id: photo.id,
-                      previewUrl: photo.previewUrl,
-                      fileName: photo.file.name,
-                    }))}
-                    pendingRemovedPhotoIds={feedEditPendingRemovedPhotoIds}
-                    saveState={feedEditSaveState}
-                    isSaving={isFeedEditSaveBusy}
-                    onToggleExpand={handleToggleFeedItem}
-                    onDraftChange={handleFeedDraftChange}
-                    onStagePhoto={handleStageFeedEditPhoto}
-                    onRemoveStagedPhoto={handleRemoveFeedEditStagedPhoto}
-                    onToggleSavedPhotoRemoval={handleToggleSavedFeedEditPhotoRemoval}
-                    onSaveDraft={handleSaveFeedDraft}
-                    onCancelEdit={handleCancelFeedEdit}
-                    onDeleteItem={handleDeleteFeedItem}
-                    recommendationPanel={feedRecommendationPanel}
-                  />
-                </ErrorBoundary>
-              }
+              feed={roomSavedStateSummary}
             />
           </div>
         </ErrorBoundary>
 
         {/* Basic Info */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Title</label>
-                <input
-                    type="text"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lowes-blue focus:border-transparent outline-none"
-                />
+              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Inspection basics</div>
+              <div className="mt-1 text-sm text-slate-600">Edit the inspection label, state, and general notes here. The detailed work areas below stay focused on room-level execution and review.</div>
             </div>
-            <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
-                <select
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value as InspectionStatus)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lowes-blue focus:border-transparent outline-none bg-white"
-                >
-                    <option value="draft">Draft</option>
-                    <option value="in_progress">In Progress</option>
-                    <option value="completed">Completed</option>
-                </select>
+            <div className="flex flex-wrap gap-2 text-xs font-semibold">
+              <span className="rounded-full bg-white px-3 py-1 text-slate-700">{generatedSections.length} sections</span>
+              <span className="rounded-full bg-white px-3 py-1 text-slate-700">{findings.length} findings</span>
+              <span className="rounded-full bg-white px-3 py-1 text-slate-700">{repairTasks.length} tasks</span>
             </div>
-        </div>
+          </div>
 
-        {/* Notes */}
-        <div>
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_220px]">
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Title</label>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lowes-blue focus:border-transparent outline-none"
+              />
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value as InspectionStatus)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lowes-blue focus:border-transparent outline-none bg-white"
+              >
+                <option value="draft">Draft</option>
+                <option value="in_progress">In Progress</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
             <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
             <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={4}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lowes-blue focus:border-transparent outline-none resize-none"
-                placeholder="General inspection notes..."
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-lowes-blue focus:border-transparent outline-none resize-none"
+              placeholder="General inspection notes..."
             />
+          </div>
         </div>
 
         {/* Generated Checklist Snapshot */}
@@ -3407,11 +4498,29 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
               <div>
                 <h3 className="text-lg font-semibold text-slate-800">Generated Checklist</h3>
                 <p className="text-sm text-slate-500">
-                  Snapshot-based checklist generated at{' '}
+                  Review snapshot generated at{' '}
                   {inspection.templateSnapshot
                     ? new Date(inspection.templateSnapshot.generatedAt).toLocaleString()
                     : 'inspection creation'}
                 </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {inspection.templateSnapshot?.turnoverPresetLabel ? (
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                      Preset: {inspection.templateSnapshot.turnoverPresetLabel}
+                    </span>
+                  ) : null}
+                  {inspection.templateSnapshot?.appliedScopedOverrideIds?.length ? (
+                    <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+                      Overrides: {inspection.templateSnapshot.appliedScopedOverrideIds.length}
+                    </span>
+                  ) : null}
+                  <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
+                    {snapshotAttentionEntries.length} unresolved
+                  </span>
+                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
+                    {snapshotProcurementEntries.length} procurement-relevant
+                  </span>
+                </div>
               </div>
               <div className="text-xs text-slate-400 text-right">
                 <div>{generatedSections.length} sections</div>
@@ -3446,6 +4555,23 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
               </div>
             </div>
 
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)] mb-4">
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">Snapshot review</div>
+                <p className="mt-1 text-sm text-slate-600">
+                  Use this section to verify what the generated inspection snapshot implies before reporting or procurement review. The live checklist above remains the editing workspace.
+                </p>
+              </div>
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-blue-800">Why this matters</div>
+                <p className="mt-1 text-sm text-blue-900">
+                  {snapshotAttentionEntries.length > 0
+                    ? `${snapshotAttentionEntries.length} generated item${snapshotAttentionEntries.length === 1 ? '' : 's'} still need review attention, and ${snapshotProcurementEntries.length} item${snapshotProcurementEntries.length === 1 ? '' : 's'} already point toward downstream materials or procurement.`
+                    : `The generated checklist is largely complete. ${snapshotProcurementEntries.length} item${snapshotProcurementEntries.length === 1 ? '' : 's'} currently carry downstream materials or procurement relevance.`}
+                </p>
+              </div>
+            </div>
+
             {checklistMessage ? (
               <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 mb-4">
                 {checklistMessage}
@@ -3453,145 +4579,429 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
             ) : null}
 
             {generatedSections.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
-                This inspection was created from a template, but no generated checklist sections were stored.
+              <div className={sectionEmptyStateClass}>
+                <div className="font-medium text-slate-700">No generated snapshot is stored for this inspection.</div>
+                <div className="mt-1">
+                  The inspection record exists, but its generated checklist snapshot is unavailable here. If this unit should have a generated checklist, review the assigned template and inspection setup path.
+                </div>
               </div>
             ) : (
               <div className="space-y-4">
-                {generatedSections
-                  .slice()
-                  .sort((a, b) => a.order - b.order)
-                  .map((section) => (
-                    <div key={section.id} className="rounded-xl border border-slate-200 overflow-hidden">
-                      <div className="bg-slate-50 px-4 py-3 border-b border-slate-200">
-                        <div className="font-semibold text-slate-800">{section.title}</div>
-                        {section.roomLabel && section.roomType ? (
-                          <div className="text-xs text-slate-500 mt-1 capitalize">
-                            {section.roomLabel} • {section.roomType.replace('_', ' ')}
-                          </div>
-                        ) : null}
+                {snapshotAttentionEntries.length > 0 ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 className="text-sm font-semibold text-amber-900">Attention Needed</h4>
+                        <p className="mt-1 text-xs text-amber-800">Generated items that are not complete yet, or are blocked/failed and should be reviewed first.</p>
                       </div>
-                      <div className="divide-y divide-slate-100">
-                        {section.items
-                          .slice()
-                          .sort((a, b) => a.order - b.order)
-                          .map((item) => (
-                            <div key={item.id} className="p-4 space-y-3">
-                              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                                <div>
-                                  <div className="font-medium text-slate-800">{item.label}</div>
-                                  <div className="text-xs text-slate-500 mt-1 flex gap-2">
-                                    <span className="capitalize">{item.category.replace(/_/g, ' ')}</span>
-                                    {item.required ? (
-                                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">
-                                        Required
-                                      </span>
-                                    ) : (
-                                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">
-                                        Optional
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                <select
-                                  value={item.status}
-                                  onChange={(e) =>
-                                    handleGeneratedItemStatusChange(
-                                      section.id,
-                                      item.id,
-                                      e.target.value as GeneratedInspectionItemStatus
-                                    )
-                                  }
-                                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white min-w-[140px]"
-                                >
-                                  <option value="not_started">Not Started</option>
-                                  <option value="in_progress">In Progress</option>
-                                  <option value="completed">Completed</option>
-                                  <option value="blocked">Blocked</option>
-                                  <option value="not_applicable">N/A</option>
-                                  <option value="failed">Failed</option>
-                                </select>
-                              </div>
-                              <textarea
-                                value={item.notes || ''}
-                                onChange={(e) =>
-                                  handleGeneratedItemNotesChange(section.id, item.id, e.target.value)
-                                }
-                                rows={2}
-                                placeholder="Item notes..."
-                                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-lowes-blue focus:border-transparent resize-none"
-                              />
-                              <div className="flex flex-wrap items-center gap-2">
-                                {photos.length > 0 ? (
-                                  <div className="flex flex-wrap gap-2">
-                                    {photos.slice(0, 6).map((photo, photoIndex) => (
-                                      <button
-                                        key={photo.id}
-                                        type="button"
-                                        onClick={() => handleGeneratedItemPhotoToggle(section.id, item.id, photo.id)}
-                                        className={`rounded-full px-2 py-1 text-xs border transition-colors ${
-                                          item.photoIds.includes(photo.id)
-                                            ? 'border-lowes-blue bg-blue-50 text-blue-700'
-                                            : 'border-slate-300 bg-white text-slate-500'
-                                        }`}
-                                      >
-                                        Photo {photoIndex + 1}
-                                      </button>
-                                    ))}
-                                  </div>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  onClick={() => void handleCreateFindingFromChecklistItem(section.id, item.id)}
-                                  disabled={(item.findingIds?.length || 0) > 0 || (item.status !== 'failed' && item.status !== 'blocked')}
-                                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-40"
-                                >
-                                  {(item.findingIds?.length || 0) > 0 ? 'Finding Created' : 'Create Structured Finding'}
-                                </button>
-                                {(item.findingIds?.length || 0) > 0 ? (
-                                  <span className="text-xs text-slate-500">
-                                    Linked findings: {item.findingIds?.length || 0}
-                                  </span>
-                                ) : item.status === 'failed' || item.status === 'blocked' ? (
-                                  <span className="text-xs text-slate-500">
-                                    Failed or blocked checklist items can become findings in one step.
-                                  </span>
-                                ) : null}
-                                {(item.findingIds?.length || 0) > 0 ? (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setFocusedScopeRecord(
-                                        createFocusedScopeRecord(
-                                          'finding',
-                                          item.findingIds?.[0] || '',
-                                          'Opened from checklist row'
-                                        )
-                                      )
-                                    }
-                                    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                                  >
-                                    Open Finding
-                                  </button>
-                                ) : item.status === 'failed' || item.status === 'blocked' ? (
-                                  <span />
-                                ) : null}
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-amber-900">
+                        {snapshotAttentionEntries.length}
+                      </span>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {snapshotAttentionEntries.slice(0, 8).map(({ section, item }) => (
+                        <div key={item.id} className="rounded-lg border border-amber-100 bg-white px-3 py-3">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-slate-900">{item.label}</div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                {section.roomLabel || section.title}
+                                {section.roomType ? ` • ${titleCase(section.roomType)}` : ''}
+                                {` • ${titleCase(item.category)}`}
                               </div>
                             </div>
-                          ))}
-                      </div>
+                            <div className="flex flex-wrap gap-2">
+                              <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                                item.status === 'failed'
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : item.status === 'blocked'
+                                    ? 'bg-amber-100 text-amber-800'
+                                    : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {titleCase(item.status)}
+                              </span>
+                              {item.required ? (
+                                <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800">Required</span>
+                              ) : null}
+                              {(item.findingIds?.length || 0) > 0 ? (
+                                <span className="rounded-full bg-blue-100 px-2 py-1 text-[11px] font-semibold text-blue-800">
+                                  Finding linked
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          {item.notes ? <p className="mt-2 line-clamp-2 text-xs text-slate-600">{item.notes}</p> : null}
+                        </div>
+                      ))}
+                      {snapshotAttentionEntries.length > 8 ? (
+                        <div className="text-xs text-amber-900">
+                          +{snapshotAttentionEntries.length - 8} more attention-needed item{snapshotAttentionEntries.length - 8 === 1 ? '' : 's'} in the snapshot
+                        </div>
+                      ) : null}
                     </div>
-                  ))}
+                  </div>
+                ) : null}
+
+                {snapshotProcurementEntries.length > 0 ? (
+                  <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 className="text-sm font-semibold text-blue-900">Materials / Procurement Relevance</h4>
+                        <p className="mt-1 text-xs text-blue-800">Items already connected to tasks, materials, or always-replace behavior.</p>
+                      </div>
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-blue-900">
+                        {snapshotProcurementEntries.length}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {snapshotProcurementEntries.slice(0, 6).map(({ section, item }) => (
+                        <div key={item.id} className="rounded-lg border border-blue-100 bg-white px-3 py-3">
+                          <div className="text-sm font-semibold text-slate-900">{item.label}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {section.roomLabel || section.title} • {titleCase(item.category)}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {isAlwaysReplaceChecklistItem(item) ? (
+                              <span className="rounded-full bg-violet-100 px-2 py-1 text-[11px] font-semibold text-violet-800">Always replace</span>
+                            ) : null}
+                            {(item.repairTaskIds?.length || 0) > 0 ? (
+                              <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
+                                {item.repairTaskIds?.length} task{item.repairTaskIds?.length === 1 ? '' : 's'}
+                              </span>
+                            ) : null}
+                            {(item.materialRequirementIds?.length || 0) > 0 ? (
+                              <span className="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-semibold text-emerald-800">
+                                {item.materialRequirementIds?.length} material{item.materialRequirementIds?.length === 1 ? '' : 's'}
+                              </span>
+                            ) : null}
+                            {item.focusedAction ? (
+                              <span className="rounded-full bg-blue-100 px-2 py-1 text-[11px] font-semibold text-blue-800">
+                                {titleCase(item.focusedAction)}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <details className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-slate-900">Snapshot by Section</h4>
+                      <p className="mt-1 text-xs text-slate-600">Use this lower-priority view to verify section-level completeness without reopening the live room workspace.</p>
+                    </div>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                      {generatedSections.length} sections
+                    </span>
+                  </summary>
+                  <div className="mt-4 space-y-3">
+                    {generatedSections
+                      .slice()
+                      .sort((a, b) => a.order - b.order)
+                      .map((section) => {
+                        const sectionEntries = generatedSnapshotEntries.filter((entry) => entry.section.id === section.id);
+                        const sectionAttentionCount = sectionEntries.filter((entry) => entry.needsAttention).length;
+                        const sectionCompleteCount = sectionEntries.filter((entry) => entry.isComplete).length;
+                        return (
+                          <div key={section.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <div className="font-semibold text-slate-800">{section.title}</div>
+                                {section.roomLabel && section.roomType ? (
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {section.roomLabel} • {titleCase(section.roomType)}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-700">{section.items.length} items</span>
+                                <span className="rounded-full bg-amber-100 px-2.5 py-1 text-amber-800">{sectionAttentionCount} unresolved</span>
+                                <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-800">{sectionCompleteCount} complete</span>
+                              </div>
+                            </div>
+                            <div className="mt-3 space-y-2">
+                              {section.items
+                                .slice()
+                                .sort((a, b) => {
+                                  const aNeedsAttention = snapshotAttentionEntries.some((entry) => entry.item.id === a.id);
+                                  const bNeedsAttention = snapshotAttentionEntries.some((entry) => entry.item.id === b.id);
+                                  if (aNeedsAttention !== bNeedsAttention) return aNeedsAttention ? -1 : 1;
+                                  return a.order - b.order;
+                                })
+                                .map((item) => (
+                                  <div key={item.id} className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                                    <div>
+                                      <div className="text-sm font-medium text-slate-800">{item.label}</div>
+                                      <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                                        <span className="capitalize">{item.category.replace(/_/g, ' ')}</span>
+                                        {item.required ? <span>Required</span> : <span>Optional</span>}
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                      <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${
+                                        item.status === 'completed' || item.status === 'not_applicable'
+                                          ? 'bg-emerald-100 text-emerald-800'
+                                          : item.status === 'failed'
+                                            ? 'bg-rose-100 text-rose-800'
+                                            : item.status === 'blocked'
+                                              ? 'bg-amber-100 text-amber-800'
+                                              : 'bg-slate-100 text-slate-700'
+                                      }`}>
+                                        {titleCase(item.status)}
+                                      </span>
+                                      {(item.findingIds?.length || 0) > 0 ? (
+                                        <span className="rounded-full bg-blue-100 px-2 py-1 text-[11px] font-semibold text-blue-800">Finding</span>
+                                      ) : null}
+                                      {(item.materialRequirementIds?.length || 0) > 0 ? (
+                                        <span className="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-semibold text-emerald-800">Material</span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                ))}
+                            </div>
+                            <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50">
+                              <summary className="cursor-pointer list-none px-3 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-slate-600">
+                                Detailed snapshot controls
+                              </summary>
+                              <div className="divide-y divide-slate-100 border-t border-slate-200">
+                                {section.items
+                                  .slice()
+                                  .sort((a, b) => a.order - b.order)
+                                  .map((item) => (
+                                    <div key={item.id} className="p-4 space-y-3">
+                                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                        <div>
+                                          <div className="font-medium text-slate-800">{item.label}</div>
+                                          <div className="text-xs text-slate-500 mt-1 flex gap-2">
+                                            <span className="capitalize">{item.category.replace(/_/g, ' ')}</span>
+                                            {item.required ? (
+                                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">
+                                                Required
+                                              </span>
+                                            ) : (
+                                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-500">
+                                                Optional
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <select
+                                          value={item.status}
+                                          onChange={(e) =>
+                                            handleGeneratedItemStatusChange(
+                                              section.id,
+                                              item.id,
+                                              e.target.value as GeneratedInspectionItemStatus
+                                            )
+                                          }
+                                          className="rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white min-w-[140px]"
+                                        >
+                                          <option value="not_started">Not Started</option>
+                                          <option value="in_progress">In Progress</option>
+                                          <option value="completed">Completed</option>
+                                          <option value="blocked">Blocked</option>
+                                          <option value="not_applicable">N/A</option>
+                                          <option value="failed">Failed</option>
+                                        </select>
+                                      </div>
+                                      <textarea
+                                        value={item.notes || ''}
+                                        onChange={(e) =>
+                                          handleGeneratedItemNotesChange(section.id, item.id, e.target.value)
+                                        }
+                                        rows={2}
+                                        placeholder="Item notes..."
+                                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-lowes-blue focus:border-transparent resize-none"
+                                      />
+                                      <div className="space-y-2">
+                                        {photos.length > 0 ? (
+                                          <div className="flex flex-wrap gap-2">
+                                            {photos.slice(0, 6).map((photo, photoIndex) => (
+                                              <button
+                                                key={photo.id}
+                                                type="button"
+                                                onClick={() => handleGeneratedItemPhotoToggle(section.id, item.id, photo.id)}
+                                                className={`rounded-full px-2 py-1 text-xs border transition-colors ${
+                                                  item.photoIds.includes(photo.id)
+                                                    ? 'border-lowes-blue bg-blue-50 text-blue-700'
+                                                    : 'border-slate-300 bg-white text-slate-500'
+                                                }`}
+                                              >
+                                                Photo {photoIndex + 1}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        ) : null}
+                                        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                                          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                                            Snapshot actions
+                                          </div>
+                                          <div className={sectionActionRowClass}>
+                                            <button
+                                              type="button"
+                                              onClick={() => void handleCreateFindingFromChecklistItem(section.id, item.id)}
+                                              disabled={(item.findingIds?.length || 0) > 0 || (item.status !== 'failed' && item.status !== 'blocked')}
+                                              className={
+                                                (item.findingIds?.length || 0) === 0 && (item.status === 'failed' || item.status === 'blocked')
+                                                  ? primaryActionButtonClass
+                                                  : secondaryActionButtonClass
+                                              }
+                                            >
+                                              {(item.findingIds?.length || 0) > 0 ? 'Finding Created' : 'Create Structured Finding'}
+                                            </button>
+                                            {(item.findingIds?.length || 0) > 0 ? (
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  setFocusedScopeRecord(
+                                                    createFocusedScopeRecord(
+                                                      'finding',
+                                                      item.findingIds?.[0] || '',
+                                                      'Opened from checklist row'
+                                                    )
+                                                  )
+                                                }
+                                                className={secondaryActionButtonClass}
+                                              >
+                                                Open Finding
+                                              </button>
+                                            ) : null}
+                                          </div>
+                                          {(item.findingIds?.length || 0) > 0 ? (
+                                            <div className="mt-2 text-xs text-slate-500">
+                                              Linked findings: {item.findingIds?.length || 0}
+                                            </div>
+                                          ) : item.status === 'failed' || item.status === 'blocked' ? (
+                                            <div className="mt-2 text-xs text-slate-500">
+                                              Failed or blocked checklist items can become findings in one step.
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                              </div>
+                            </details>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </details>
               </div>
             )}
           </div>
         )}
 
+        {resolvedProcurementBundles.length > 0 ? (
+          <div className="border-t border-slate-200 pt-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800">Suggested Procurement Bundles</h3>
+                <p className="text-sm text-slate-500">
+                  Derived from final generated checklist output and linked material requirements.
+                </p>
+              </div>
+              <div className="text-xs text-slate-400 text-right">
+                <div>{resolvedProcurementBundles.length} bundles</div>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {resolvedProcurementBundles.map((bundle) => (
+                <div key={bundle.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-slate-900">{bundle.label}</div>
+                      <div className="mt-1 text-sm text-slate-500">{bundle.description}</div>
+                    </div>
+                    <div className="text-xs text-slate-500 text-right">
+                      <div>{bundle.sourceGeneratedItemIds.length} trigger items</div>
+                      <div>{bundle.lines.length} suggested lines</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {bundle.preferredProductTier ? (
+                      <span className="rounded-full bg-slate-200 px-2 py-1 text-[11px] font-medium text-slate-700">
+                        Tier: {bundle.preferredProductTier}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {bundle.lines.map((line) => (
+                      <div key={line.id} className="rounded-md bg-white px-3 py-2 text-sm text-slate-700">
+                        <div className="font-medium text-slate-800">{line.label}</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {line.quantity === null ? 'Manual quantity' : `${line.quantity} • ${line.quantityStrategy}`}
+                          {line.lowesCategory ? ` • ${line.lowesCategory}` : ''}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {resolvedBundleProductRecommendations.length > 0 ? (
+              <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-slate-800">Bundle Product Recommendations</h4>
+                    <p className="text-xs text-slate-500">Catalog-driven matches for the current bundle lines.</p>
+                  </div>
+                  <div className="text-xs text-slate-400 text-right">
+                    <div>
+                      {resolvedBundleProductRecommendations.filter((entry) => entry.status === 'resolved').length} resolved
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {resolvedBundleProductRecommendations.slice(0, 4).map((recommendation) => (
+                    <div key={recommendation.id} className="rounded-md bg-slate-50 px-3 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-slate-800">{recommendation.bundleLineLabel}</div>
+                          <div className="mt-1 text-xs text-slate-500">{recommendation.bundleLabel}</div>
+                        </div>
+                        <span
+                          className={`rounded-full px-2 py-1 text-[11px] font-medium ${
+                            recommendation.status === 'resolved'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {recommendation.status === 'resolved' ? titleCase(recommendation.resolutionMethod) : 'Manual Needed'}
+                        </span>
+                      </div>
+                      <div className="mt-2 text-sm text-slate-700">
+                        {recommendation.status === 'resolved'
+                          ? `${recommendation.recommendedProductLabel} • ${recommendation.quantity ?? 'Manual'} ${recommendation.unit}`
+                          : 'No safe catalog match yet. Review in procurement.'}
+                      </div>
+                      {recommendation.alternates.length > 0 ? (
+                        <div className="mt-1 text-xs text-slate-500">
+                          Alternates: {recommendation.alternates.slice(0, 2).map((alternate) => alternate.productLabel).join(' • ')}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-white px-4 py-5 text-sm text-slate-600">
+                <div className="font-medium text-slate-700">No catalog-backed bundle recommendations yet.</div>
+                <div className="mt-1">
+                  Bundle suggestions exist, but nothing in this inspection resolved into a safe product recommendation. Continue in Procurement if you need manual product selection.
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
+
         {/* Photos Section */}
         <div>
             <div className="flex items-center justify-between mb-4">
                 <label className="block text-sm font-medium text-slate-700">Photos ({photos.length})</label>
-                <label className={`cursor-pointer text-lowes-blue text-sm font-medium flex items-center gap-2 hover:underline ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                <label className={`${primaryActionButtonClass} cursor-pointer ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
                     {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
                     Add Photo
                     <input 
@@ -3606,8 +5016,9 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
             </div>
             
             {photos.length === 0 ? (
-                <div className="bg-slate-50 border border-dashed border-slate-200 rounded-lg p-8 text-center text-slate-400 text-sm">
-                    No photos attached. Click "Add Photo" to capture.
+                <div className={`${sectionEmptyStateClass} text-center`}>
+                    <div className="font-medium text-slate-700">No photo evidence yet.</div>
+                    <div className="mt-1">Add a photo when this inspection needs visual proof, damage context, or documentation for downstream review.</div>
                 </div>
             ) : (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -3626,7 +5037,10 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                                 </div>
                             ) : (
                                 <div className="w-full h-full flex items-center justify-center">
-                                    <Loader2 size={20} className="animate-spin text-slate-400" />
+                                    <div className="flex flex-col items-center gap-2 text-slate-400">
+                                      <Loader2 size={20} className="animate-spin text-slate-400" />
+                                      <span className="text-[11px] font-medium">Loading preview…</span>
+                                    </div>
                                 </div>
                             )}
                             <button 
@@ -3650,7 +5064,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
             </h3>
             <button
               onClick={() => setIsProductSelectorOpen(true)}
-              className="text-sm bg-lowes-blue text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
+              className={primaryActionButtonClass}
             >
               <PlusCircle size={16} />
               Add Product
@@ -3658,8 +5072,11 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
           </div>
 
           {productInstances.length === 0 ? (
-            <div className="bg-slate-50 border border-dashed border-slate-200 rounded-lg p-8 text-center text-slate-400 text-sm">
-              No products added yet. Click "Add Product" to select from catalog.
+            <div className={`${sectionEmptyStateClass} text-center`}>
+              <div className="font-medium text-slate-700">No manual products added yet.</div>
+              <div className="mt-1">
+                This section is for manually tracked products on the inspection record. Use <span className="font-medium text-slate-700">Add Product</span> if you need to capture catalog items outside the generated materials flow.
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
@@ -3668,7 +5085,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                 return (
                   <div key={instance.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-200">
                     <div className="flex-1">
-                      <h4 className="font-semibold text-slate-800">{item?.title || item?.name || 'Loading...'}</h4>
+                      <h4 className="font-semibold text-slate-800">{item?.title || item?.name || 'Catalog details loading…'}</h4>
                       <p className="text-xs text-slate-500">
                         {item?.options[0]?.sku && `SKU: ${item.options[0].sku}`}
                         {item?.options[0]?.price && ` • $${item.options[0].price.toFixed(2)}`}
@@ -3678,14 +5095,14 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => handleUpdateProductQty(instance.id, Math.max(1, instance.qty - 1))}
-                          className="p-1 hover:bg-slate-200 rounded-lg text-slate-500"
+                          className="rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-200"
                         >
                           <MinusCircle size={18} />
                         </button>
                         <span className="w-8 text-center font-bold text-slate-700">{instance.qty}</span>
                         <button
                           onClick={() => handleUpdateProductQty(instance.id, instance.qty + 1)}
-                          className="p-1 hover:bg-slate-200 rounded-lg text-slate-500"
+                          className="rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-200"
                         >
                           <PlusCircle size={18} />
                         </button>
@@ -3741,28 +5158,49 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
           }}
         />
 
-        {/* Reports Section (Feature Flagged) */}
-        {flags?.pdf_reports && (
+        {/* Reports Section */}
             <div className="border-t border-slate-200 pt-6">
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
                         <FileText size={20} className="text-slate-600" />
-                        <h3 className="text-lg font-semibold text-slate-800">PDF Reports</h3>
+                        <h3 className="text-lg font-semibold text-slate-800">Report Handoff</h3>
                     </div>
-                    {(!latestReport || latestReport.status === 'ready' || latestReport.status === 'failed') && (
-                        <button
-                            onClick={handleGenerateReport}
-                            disabled={isGeneratingReport}
-                            className="text-sm bg-slate-100 text-slate-700 px-3 py-2 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2 disabled:opacity-50"
-                        >
-                            {isGeneratingReport ? <Loader2 size={14} className="animate-spin" /> : null}
-                            Generate New Report
-                        </button>
-                    )}
+                    <button
+                        onClick={handleGenerateReport}
+                        disabled={isGeneratingReport || !canRequestReport || latestReport?.status === 'queued' || latestReport?.status === 'generating'}
+                        className={secondaryActionButtonClass}
+                        title={reportActionDisabledReason || undefined}
+                    >
+                        {isGeneratingReport || latestReport?.status === 'queued' || latestReport?.status === 'generating' ? <Loader2 size={14} className="animate-spin" /> : null}
+                        {latestReport ? 'Generate Fresh Report' : 'Generate Report'}
+                    </button>
                 </div>
 
+                {reportStatusMessage ? (
+                    <div
+                        className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+                            reportStatusMessage.tone === 'error'
+                                ? 'border-red-200 bg-red-50 text-red-700'
+                                : reportStatusMessage.tone === 'success'
+                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                    : 'border-blue-200 bg-blue-50 text-blue-700'
+                        }`}
+                    >
+                        {reportStatusMessage.text}
+                    </div>
+                ) : null}
+
+                {reportActionDisabledReason ? (
+                    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                        {reportActionDisabledReason}
+                    </div>
+                ) : null}
+
                 {!latestReport ? (
-                    <div className="text-sm text-slate-500 italic">No reports generated yet.</div>
+                    <div className={sectionEmptyStateClass}>
+                      <div className="font-medium text-slate-700">No handoff report has been generated yet.</div>
+                      <div className="mt-1">That is normal until you are ready to package the inspection for download or sharing. Use <span className="font-medium text-slate-700">Generate Report</span> when this inspection is ready for review.</div>
+                    </div>
                 ) : (
                     <div className="bg-slate-50 rounded-lg p-4 border border-slate-200 flex items-center justify-between">
                         <div>
@@ -3812,7 +5250,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                                 className="flex items-center gap-2 bg-white border border-slate-300 text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-50 transition-colors text-sm font-medium"
                             >
                                 <Download size={16} />
-                                Download PDF
+                                Open Report
                             </a>
                         )}
                          {latestReport.status === 'failed' && (
@@ -3826,7 +5264,6 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                     </div>
                 )}
             </div>
-        )}
 
         {/* Share Section (Feature Flagged) */}
         {flags?.public_share_links && (
@@ -3837,6 +5274,20 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                 </div>
 
                 <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-4">
+                    {shareStatusMessage ? (
+                        <div
+                            className={`rounded-xl border px-4 py-3 text-sm ${
+                                shareStatusMessage.tone === 'error'
+                                    ? 'border-red-200 bg-red-50 text-red-700'
+                                    : shareStatusMessage.tone === 'success'
+                                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                        : 'border-blue-200 bg-blue-50 text-blue-700'
+                            }`}
+                        >
+                            {shareStatusMessage.text}
+                        </div>
+                    ) : null}
+
                     {/* Create Link Form */}
                     <div className="flex items-end gap-4">
                         <div className="flex-1">
@@ -3856,7 +5307,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                         <button
                             onClick={handleCreateShareLink}
                             disabled={isCreatingLink || !latestReport || latestReport.status !== 'ready'}
-                            className="bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition-colors disabled:opacity-50 flex items-center gap-2 h-[38px]"
+                            className={`${primaryActionButtonClass} h-[40px]`}
                         >
                             {isCreatingLink ? <Loader2 size={16} className="animate-spin" /> : <Share2 size={16} />}
                             Create Public Link
@@ -3866,7 +5317,7 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                     {!latestReport || latestReport.status !== 'ready' ? (
                         <p className="text-xs text-amber-600 flex items-center gap-1">
                             <AlertCircle size={12} />
-                            Generate a PDF report first to create a share link.
+                            Generate a ready PDF report first. Public share links only appear after a downloadable report exists.
                         </p>
                     ) : null}
 
@@ -3903,10 +5354,11 @@ export const InspectionDetail: React.FC<InspectionDetailProps> = ({
                                                 </button>
                                                 <button 
                                                     onClick={() => handleRevokeLink(link.token)}
+                                                    disabled={revokingToken === link.token}
                                                     className="p-1.5 hover:bg-red-100 rounded text-red-400 hover:text-red-600"
                                                     title="Revoke Link"
                                                 >
-                                                    <XCircle size={16} />
+                                                    {revokingToken === link.token ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />}
                                                 </button>
                                             </>
                                         )}

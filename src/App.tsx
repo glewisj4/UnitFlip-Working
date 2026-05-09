@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
@@ -62,6 +62,7 @@ type FocusedProcurementArrivalContext = {
   nextStep: string;
 };
 type FocusedWorkflowSubmissionState = {
+  inspectionId: string;
   outcome: 'submitted' | 'queued' | 'failed';
   unitName: string;
   itemCount: number;
@@ -99,6 +100,16 @@ type FocusedWorkflowSession = {
 
 const RECENT_WORK_LIMIT = 5;
 const APP_MODE_STORAGE_KEY = 'unitflip:app-mode:v1';
+const FOCUSED_WORKFLOW_STORAGE_KEY_PREFIX = 'unitflip:focused-workflow:';
+const VALID_FOCUSED_SESSION_STEPS = new Set<FocusedWorkflowSession extends { step: infer T } ? T : never>([
+  'home',
+  'unit-select',
+  'inspection',
+  'summary',
+  'materials',
+  'select',
+]);
+const VALID_FOCUSED_SUBMISSION_OUTCOMES = new Set<FocusedWorkflowSubmissionState['outcome']>(['submitted', 'queued', 'failed']);
 const getShareTokenFromLocation = (): string | null => {
   const pathname = window.location.pathname || '';
   if (!pathname.startsWith('/share/')) return null;
@@ -127,41 +138,137 @@ const buildRecentWorkId = (entry: Omit<RecentWorkEntry, 'id'>) =>
   ].join('::');
 
 const buildRecentWorkStorageKey = (role?: string | null) => `unitflip:recent-work:${role || 'anonymous'}`;
-const buildFocusedWorkflowStorageKey = (role?: string | null) => `unitflip:focused-workflow:${role || 'anonymous'}`;
+const buildFocusedWorkflowStorageKey = (role?: string | null) => `${FOCUSED_WORKFLOW_STORAGE_KEY_PREFIX}${role || 'anonymous'}`;
+const readOptionalString = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim().length > 0 ? value : null;
+const clearFocusedWorkflowStorageBranch = (storageKey: string, branch: 'local' | 'session') => {
+  if (typeof window === 'undefined') return;
+  try {
+    if (branch === 'local') {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.sessionStorage.removeItem(storageKey);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+};
+const normalizeFocusedWorkflowSubmissionState = (
+  value: unknown,
+  expectedInspectionId?: string | null
+): FocusedWorkflowSubmissionState | null => {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<FocusedWorkflowSubmissionState>;
+  const inspectionId = readOptionalString(candidate.inspectionId);
+  const outcome =
+    typeof candidate.outcome === 'string' && VALID_FOCUSED_SUBMISSION_OUTCOMES.has(candidate.outcome as FocusedWorkflowSubmissionState['outcome'])
+      ? (candidate.outcome as FocusedWorkflowSubmissionState['outcome'])
+      : null;
+  if (!inspectionId || !outcome) return null;
+  if (expectedInspectionId && inspectionId !== expectedInspectionId) return null;
+  if (!Array.isArray(candidate.requirementIds)) return null;
+  return {
+    inspectionId,
+    outcome,
+    unitName: typeof candidate.unitName === 'string' && candidate.unitName.trim() ? candidate.unitName : 'This unit',
+    itemCount: typeof candidate.itemCount === 'number' && Number.isFinite(candidate.itemCount) ? candidate.itemCount : 0,
+    estimatedTotal:
+      typeof candidate.estimatedTotal === 'number' && Number.isFinite(candidate.estimatedTotal) ? candidate.estimatedTotal : 0,
+    requirementIds: Array.from(
+      new Set(candidate.requirementIds.map((entry) => readOptionalString(entry)).filter((entry): entry is string => Boolean(entry)))
+    ),
+    nextStep:
+      typeof candidate.nextStep === 'string' && candidate.nextStep.trim()
+        ? candidate.nextStep
+        : 'Return to the focused workflow and continue from the next safe step.',
+    detail:
+      typeof candidate.detail === 'string' && candidate.detail.trim()
+        ? candidate.detail
+        : 'Focused submission state was restored from local data.',
+  };
+};
 const normalizeFocusedWorkflowSession = (value: unknown): FocusedWorkflowSession => {
   if (!value || typeof value !== 'object') return null;
   const candidate = value as Partial<Exclude<FocusedWorkflowSession, null>>;
-  if (candidate.intent !== 'inspection' && candidate.intent !== 'materials') return null;
+  const intent = candidate.intent === 'materials' ? 'materials' : candidate.intent === 'inspection' ? 'inspection' : null;
+  if (!intent) return null;
+  const normalizedStep =
+    typeof candidate.step === 'string' && VALID_FOCUSED_SESSION_STEPS.has(candidate.step as Exclude<FocusedWorkflowSession, null>['step'])
+      ? (candidate.step as Exclude<FocusedWorkflowSession, null>['step'])
+      : null;
+  let inspectionId = readOptionalString(candidate.inspectionId);
+  const unitId = readOptionalString(candidate.unitId);
+  let roomId = readOptionalString(candidate.roomId);
+  let itemId = readOptionalString(candidate.itemId);
+  let submissionState = normalizeFocusedWorkflowSubmissionState(candidate.submissionState, inspectionId);
+  if (!inspectionId && submissionState?.inspectionId) {
+    inspectionId = submissionState.inspectionId;
+    submissionState = normalizeFocusedWorkflowSubmissionState(candidate.submissionState, inspectionId);
+  }
+  if (!inspectionId) {
+    roomId = null;
+    itemId = null;
+  }
+  const step =
+    normalizedStep ||
+    (inspectionId || unitId ? (intent === 'materials' ? 'materials' : 'inspection') : 'home');
+  if (!inspectionId && !unitId && !submissionState) return null;
+  const normalizedScopeTarget =
+    candidate.scopeTarget &&
+    typeof candidate.scopeTarget === 'object' &&
+    (candidate.scopeTarget as InspectionScopeTarget).entityType &&
+    readOptionalString((candidate.scopeTarget as InspectionScopeTarget).entityId)
+      ? {
+          entityType: (candidate.scopeTarget as InspectionScopeTarget).entityType,
+          entityId: readOptionalString((candidate.scopeTarget as InspectionScopeTarget).entityId)!,
+          originLabel: readOptionalString((candidate.scopeTarget as InspectionScopeTarget).originLabel),
+        }
+      : null;
   return {
-    intent: candidate.intent,
-    step: candidate.step || 'inspection',
-    unitId: candidate.unitId || null,
-    inspectionId: candidate.inspectionId || null,
-    roomId: candidate.roomId || null,
-    itemId: candidate.itemId || null,
-    scopeSection: candidate.scopeSection || null,
-    scopeTarget: candidate.scopeTarget || null,
-    procurementRequirementId: candidate.procurementRequirementId || null,
-    submissionState: candidate.submissionState || null,
+    intent,
+    step:
+      step === 'summary' && !inspectionId
+        ? unitId
+          ? 'inspection'
+          : 'home'
+        : step,
+    unitId,
+    inspectionId,
+    roomId,
+    itemId,
+    scopeSection:
+      candidate.scopeSection === 'findings' || candidate.scopeSection === 'tasks' || candidate.scopeSection === 'materials'
+        ? candidate.scopeSection
+        : null,
+    scopeTarget: normalizedScopeTarget,
+    procurementRequirementId: readOptionalString(candidate.procurementRequirementId),
+    submissionState,
   };
 };
 const readFocusedWorkflowSession = (role?: string | null): FocusedWorkflowSession => {
   if (typeof window === 'undefined') return null;
   const storageKey = buildFocusedWorkflowStorageKey(role);
-  try {
-    const raw = window.localStorage.getItem(storageKey) || window.sessionStorage.getItem(storageKey);
-    if (!raw) return null;
-    const normalized = normalizeFocusedWorkflowSession(JSON.parse(raw));
-    if (!normalized) {
-      window.localStorage.removeItem(storageKey);
-      window.sessionStorage.removeItem(storageKey);
+  const readBranch = (branch: 'local' | 'session') => {
+    try {
+      const raw = branch === 'local' ? window.localStorage.getItem(storageKey) : window.sessionStorage.getItem(storageKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const normalized = normalizeFocusedWorkflowSession(parsed);
+      if (!normalized) {
+        clearFocusedWorkflowStorageBranch(storageKey, branch);
+      }
+      return normalized;
+    } catch {
+      clearFocusedWorkflowStorageBranch(storageKey, branch);
+      return null;
     }
-    return normalized;
-  } catch {
-    window.localStorage.removeItem(storageKey);
-    window.sessionStorage.removeItem(storageKey);
-    return null;
+  };
+  const localSession = readBranch('local');
+  const sessionSession = readBranch('session');
+  if (localSession) {
+    return localSession;
   }
+  return sessionSession;
 };
 
 const readRecentWork = (role?: string | null): RecentWorkEntry[] => {
@@ -181,6 +288,9 @@ const trimRouteOriginLabel = (value?: string | null) =>
     ?.replace(/^Opened from [^•]+ • /, '')
     ?.replace(/^Opened from [^•]+$/, '')
     ?.trim() || null;
+
+const areFocusedWorkflowSessionsEqual = (left: FocusedWorkflowSession, right: FocusedWorkflowSession) =>
+  JSON.stringify(left) === JSON.stringify(right);
 
 const AppContent: React.FC = () => {
   // NOTE: This AppState is legacy/local-only for Rooms/Products/Templates.
@@ -256,14 +366,13 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      const storageKey = buildFocusedWorkflowStorageKey(role);
       if (focusedWorkflowSession) {
         const serializedSession = JSON.stringify(focusedWorkflowSession);
-        window.sessionStorage.setItem(storageKey, serializedSession);
-        window.localStorage.setItem(storageKey, serializedSession);
+        window.sessionStorage.setItem(buildFocusedWorkflowStorageKey(role), serializedSession);
+        window.localStorage.setItem(buildFocusedWorkflowStorageKey(role), serializedSession);
       } else {
-        window.sessionStorage.removeItem(storageKey);
-        window.localStorage.removeItem(storageKey);
+        window.sessionStorage.removeItem(buildFocusedWorkflowStorageKey(role));
+        window.localStorage.removeItem(buildFocusedWorkflowStorageKey(role));
       }
     } catch {
       // Ignore session-scoped UI persistence failures.
@@ -274,13 +383,31 @@ const AppContent: React.FC = () => {
     if (appMode !== 'focused' || focusedRoute !== 'home' || !focusedWorkflowSession) return;
     if (!focusedWorkflowSession.inspectionId && !focusedWorkflowSession.unitId) return;
     setFocusedRoute(
-      focusedWorkflowSession.step === 'select' || focusedWorkflowSession.step === 'unit-select'
+      focusedWorkflowSession.step === 'select'
         ? 'inspection'
         : focusedWorkflowSession.step === 'home'
           ? 'inspection'
           : focusedWorkflowSession.step
     );
   }, [appMode, focusedRoute, focusedWorkflowSession]);
+
+  useEffect(() => {
+    if (appMode !== 'focused') return;
+    const canInspectInFocusedMode = AuthPolicyService.canAccessView(permissions, 'inspections');
+    const canUseFocusedMaterials = AuthPolicyService.canAccessView(permissions, 'procurement');
+
+    if (focusedRoute === 'inspection' && !canInspectInFocusedMode) {
+      setFocusedRoute('home');
+      setFocusedWorkflowSession((current) => (current?.intent === 'inspection' ? null : current));
+      return;
+    }
+
+    if (focusedRoute === 'materials' && !canUseFocusedMaterials) {
+      setFocusedRoute('home');
+      setFocusedWorkflowSession((current) => (current?.intent === 'materials' ? null : current));
+    }
+  }, [appMode, focusedRoute, permissions]);
+
   const pushRecentWork = (entry: Omit<RecentWorkEntry, 'id'> | null) => {
     if (!entry || !entry.unitId) return;
     const nextEntry: RecentWorkEntry = {
@@ -526,6 +653,46 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const handleFocusedContextChange = useCallback((context: {
+    intent: 'inspection' | 'materials';
+    step: 'select' | 'inspection' | 'summary' | 'materials';
+    unitId?: string | null;
+    inspectionId?: string | null;
+    roomId?: string | null;
+    itemId?: string | null;
+    scopeSection?: InspectionScopeSection | null;
+    scopeTarget?: InspectionScopeTarget | null;
+    procurementRequirementId?: string | null;
+    submissionState?: FocusedWorkflowSubmissionState | null;
+  }) => {
+    const shouldClearFocusedSession =
+      context.step === 'select' &&
+      !context.unitId &&
+      !context.inspectionId &&
+      !context.submissionState;
+    const nextFocusedSession: FocusedWorkflowSession = shouldClearFocusedSession
+      ? null
+      : {
+          intent: context.intent,
+          step: context.step,
+          unitId: context.unitId || null,
+          inspectionId: context.inspectionId || null,
+          roomId: context.roomId || null,
+          itemId: context.itemId || null,
+          scopeSection: context.scopeSection || null,
+          scopeTarget: context.scopeTarget || null,
+          procurementRequirementId: context.procurementRequirementId || null,
+          submissionState: context.submissionState || null,
+        };
+    const nextFocusedRoute = context.step === 'select' ? 'inspection' : context.step;
+
+    setFocusedRoute((current) => (current === nextFocusedRoute ? current : nextFocusedRoute));
+    focusedWorkflowSessionRef.current = nextFocusedSession;
+    setFocusedWorkflowSession((current) =>
+      areFocusedWorkflowSessionsEqual(current, nextFocusedSession) ? current : nextFocusedSession
+    );
+  }, []);
+
   const renderFocusedContent = () => {
     if (focusedRoute === 'home') {
       return (
@@ -538,7 +705,7 @@ const AppContent: React.FC = () => {
           }}
           onProcessMaterials={() => {
             if (!AuthPolicyService.canAccessView(permissions, 'procurement')) return;
-            if (role === 'vendor') {
+            if (AuthPolicyService.canPerformVendorActions(role, permissions)) {
               setAppMode('full');
               openProcurement({ focus: 'vendor' });
               return;
@@ -553,32 +720,35 @@ const AppContent: React.FC = () => {
     return (
       <FocusedInspectionWorkflow
         intent={focusedRoute === 'materials' ? 'materials' : 'inspection'}
-        initialUnitId={focusedWorkflowSession?.unitId || selectedWorkspaceUnitId || selectedUnitId || focusedProcurementUnitId}
-        initialInspectionId={focusedWorkflowSession?.inspectionId || selectedInspectionId}
-        initialStep={focusedWorkflowSession?.step === 'select' ? 'inspection' : focusedWorkflowSession?.step}
+        initialUnitId={focusedWorkflowSession?.unitId || null}
+        initialInspectionId={focusedWorkflowSession?.inspectionId || null}
+        initialStep={
+          focusedWorkflowSession?.step === 'select' || focusedWorkflowSession?.step === 'unit-select'
+            ? 'select'
+            : focusedWorkflowSession?.step
+        }
         initialRoomId={focusedWorkflowSession?.roomId || null}
         initialItemId={focusedWorkflowSession?.itemId || null}
         initialSubmissionState={focusedWorkflowSession?.submissionState || null}
-        onContextChange={(context) => {
-          const nextFocusedSession: FocusedWorkflowSession =
-            context.step === 'select' && !context.unitId && !context.inspectionId && !context.submissionState
-              ? null
-              : {
-                  intent: context.intent,
-                  step: context.step,
-                  unitId: context.unitId || null,
-                  inspectionId: context.inspectionId || null,
-                  roomId: context.roomId || null,
-                  itemId: context.itemId || null,
-                  scopeSection: context.scopeSection || null,
-                  scopeTarget: context.scopeTarget || null,
-                  procurementRequirementId: context.procurementRequirementId || null,
-                  submissionState: context.submissionState || null,
-                };
-          setFocusedRoute(context.step === 'select' ? 'inspection' : context.step);
-          focusedWorkflowSessionRef.current = nextFocusedSession;
-          setFocusedWorkflowSession(nextFocusedSession);
+        onOpenUnitWorkspace={(unitId) => {
+          setAppMode('full');
+          openUnitWorkspace(unitId, null, 'Focused template recovery');
         }}
+        onOpenInspectionReview={(inspectionId, unitId) => {
+          setAppMode('full');
+          openInspection({
+            unitId,
+            inspectionId,
+            originContextLabel: 'Opened from Focused Mode • Report handoff',
+            recentLabel: 'Focused inspection report review',
+            recentDetail: 'Opened report handoff from the focused completion layer.',
+          });
+        }}
+        onOpenTemplateSetup={() => {
+          setAppMode('full');
+          setCurrentView('templates');
+        }}
+        onContextChange={handleFocusedContextChange}
         onExit={() => {
           focusedWorkflowSessionRef.current = null;
           setFocusedWorkflowSession(null);
@@ -656,10 +826,10 @@ const AppContent: React.FC = () => {
   }, [debouncedSave]);
 
   useEffect(() => {
-    if (currentView === 'feedback-management' && role !== 'developer') {
-      setCurrentView(AuthPolicyService.getDefaultViewForRole(role || 'manager'));
+    if (currentView === 'feedback-management' && !AuthPolicyService.canUseDeveloperTools(role, permissions)) {
+      setCurrentView(AuthPolicyService.getDefaultViewForRole(role || 'vendor'));
     }
-  }, [currentView, role]);
+  }, [currentView, permissions, role]);
 
   useEffect(() => {
     if (!role) return;
@@ -863,7 +1033,7 @@ const AppContent: React.FC = () => {
     }
     
     if (currentView === 'admin') {
-      if (!AuthPolicyService.canAccessView(permissions, 'admin')) {
+      if (!AuthPolicyService.canAccessAdminSettings(role, permissions)) {
         return (
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="text-xl font-semibold text-slate-900">Admin access required</h2>
@@ -874,13 +1044,17 @@ const AppContent: React.FC = () => {
 
       return (
         <AdminRetentionPanel
-          onOpenFeedbackManagement={role === 'developer' ? () => setCurrentView('feedback-management') : undefined}
+          onOpenFeedbackManagement={
+            AuthPolicyService.canUseDeveloperTools(role, permissions)
+              ? () => setCurrentView('feedback-management')
+              : undefined
+          }
         />
       );
     }
 
     if (currentView === 'feedback-management') {
-      if (role !== 'developer') {
+      if (!AuthPolicyService.canUseDeveloperTools(role, permissions)) {
         return <AdminRetentionPanel />;
       }
 
@@ -888,7 +1062,7 @@ const AppContent: React.FC = () => {
     }
 
     if (currentView === 'templates') {
-      if (!AuthPolicyService.canAccessView(permissions, 'templates')) {
+      if (!AuthPolicyService.canManageTemplates(role, permissions)) {
         return (
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="text-xl font-semibold text-slate-900">Template access is unavailable</h2>
