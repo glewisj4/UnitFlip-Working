@@ -1,6 +1,9 @@
 import {
+  ProcurementBundleId,
   ProcurementOptimizationSignal,
   ProcurementOfferFreshnessLabel,
+  ResolvedProcurementProductRecommendation,
+  ResolvedProcurementBundle,
   ProcurementReviewGuidanceCode,
   ProcurementVendorRiskSignal,
   SelectedProcurementOption,
@@ -205,6 +208,21 @@ export interface MaterialRequirementSummary {
   procurementReadyCount: number;
 }
 
+export interface MaterialRequirementRoomRollup {
+  roomLabel: string;
+  quantity: number;
+}
+
+export interface MaterialRequirementRollup {
+  key: string;
+  itemDescription: string;
+  category: string;
+  totalQuantity: number;
+  unit: string;
+  requirementIds: string[];
+  rooms: MaterialRequirementRoomRollup[];
+}
+
 export interface ChecklistExecutionSummary {
   total: number;
   completedCount: number;
@@ -265,15 +283,69 @@ export interface InspectionProcurementReviewGuidanceSummary {
   summaries: string[];
 }
 
+export interface InspectionProcurementBundleSummary {
+  bundleCount: number;
+  bundleIds: ProcurementBundleId[];
+  sourceItemCount: number;
+  preferredProductTiers: string[];
+  summaries: string[];
+}
+
+export interface InspectionReportIssueMaterialSummary {
+  requirementId: string;
+  label: string;
+  quantity: number;
+  unit: string;
+  status: MaterialRequirementStatus;
+  selectedProductLabel?: string;
+}
+
+export interface InspectionReportIssueSummary {
+  itemId: string;
+  roomLabel: string;
+  itemLabel: string;
+  action: 'repair' | 'replace';
+  description?: string;
+  notes?: string;
+  materialsAssigned: boolean;
+  materials: InspectionReportIssueMaterialSummary[];
+}
+
+export interface InspectionReportPassedItemSummary {
+  itemId: string;
+  roomLabel: string;
+  itemLabel: string;
+}
+
+export interface InspectionReportDecisionSummary {
+  totalChecked: number;
+  goodCount: number;
+  repairCount: number;
+  replaceCount: number;
+  itemsNeedingMaterialsCount: number;
+}
+
+export interface InspectionReportDecisionReport {
+  summary: InspectionReportDecisionSummary;
+  issues: InspectionReportIssueSummary[];
+  passedItems: InspectionReportPassedItemSummary[];
+}
+
 export interface InspectionReportSnapshot {
   inspectionId: string;
   unitId: string;
   generatedAt: number;
+  isInspectionFinalized?: boolean;
   findings: Finding[];
   repairTasks: RepairTask[];
   materialRequirements: MaterialRequirement[];
+  materialRequirementRollups?: MaterialRequirementRollup[];
   summary: InspectionOperationalSummary;
   procurementOptimization?: InspectionProcurementOptimizationSummary;
   procurementVendorIntelligence?: InspectionProcurementVendorIntelligenceSummary;
   procurementReviewGuidance?: InspectionProcurementReviewGuidanceSummary;
+  procurementBundles?: InspectionProcurementBundleSummary;
+  resolvedProcurementBundles?: ResolvedProcurementBundle[];
+  resolvedProcurementBundleProducts?: ResolvedProcurementProductRecommendation[];
+  decisionReport?: InspectionReportDecisionReport;
 }

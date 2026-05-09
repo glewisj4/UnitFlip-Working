@@ -5,26 +5,202 @@ import {
   FindingCategory,
   FindingSeverity,
   InspectionOperationalSummary,
+  InspectionProcurementBundleSummary,
   InspectionProcurementOptimizationSummary,
   InspectionProcurementReviewGuidanceSummary,
   InspectionProcurementVendorIntelligenceSummary,
+  InspectionReportDecisionReport,
   InspectionReportSnapshot,
   MaterialRequirement,
+  MaterialRequirementRollup,
   RepairTask,
   RepairTaskStatus,
   ScopeReadinessSummary,
   TradeOption,
 } from '../models/operations';
-import { GeneratedInspectionItem } from '../models/templates';
+import { GeneratedInspectionItem, GeneratedInspectionSection, TurnoverPresetProductTier } from '../models/templates';
 import { ProcurementOptimizationSignal } from '../models/procurement';
 import { FindingService } from './FindingService';
 import { InspectionService } from './InspectionService';
 import { MaterialRequirementService } from './MaterialRequirementService';
+import { ProcurementBundleService } from './ProcurementBundleService';
 import { ProcurementDraftService } from './ProcurementDraftService';
+import { ProcurementProductResolutionService } from './ProcurementProductResolutionService';
 import { RepairTaskService } from './RepairTaskService';
 
 const incrementRecord = <T extends string>(record: Partial<Record<T, number>>, key: T) => {
   record[key] = (record[key] || 0) + 1;
+};
+
+const isAlwaysReplaceChecklistItem = (item: GeneratedInspectionItem) => item.itemType === 'always_replace';
+
+const hasAlwaysReplaceInputCaptured = (item: GeneratedInspectionItem) => {
+  if (!isAlwaysReplaceChecklistItem(item)) return false;
+  if (((item.materialRequirementIds?.length || 0) > 0) || ((item.repairTaskIds?.length || 0) > 0)) {
+    return true;
+  }
+  if (item.inputMode === 'count') {
+    return typeof item.inputValue?.quantity === 'number' && item.inputValue.quantity > 0;
+  }
+  if (item.inputMode === 'dimensions') {
+    return Boolean(
+      item.inputValue?.dimensions &&
+        item.inputValue.dimensions.width > 0 &&
+        item.inputValue.dimensions.height > 0
+    );
+  }
+  if (item.inputMode === 'area') {
+    return typeof item.inputValue?.area === 'number' && item.inputValue.area > 0;
+  }
+  return false;
+};
+
+const getDecisionOutcome = (item: GeneratedInspectionItem): 'good' | 'repair' | 'replace' | null => {
+  if (item.focusedAction === 'good' || item.focusedAction === 'repair' || item.focusedAction === 'replace') {
+    return item.focusedAction;
+  }
+  if (isAlwaysReplaceChecklistItem(item) && hasAlwaysReplaceInputCaptured(item)) {
+    return 'replace';
+  }
+  return null;
+};
+
+const normalizeRollupKeyPart = (value?: string | null) => (value || '').trim().toLowerCase();
+
+const createMaterialRequirementRollups = (materials: MaterialRequirement[]): MaterialRequirementRollup[] => {
+  const rollups = new Map<string, MaterialRequirementRollup>();
+
+  materials.forEach((material) => {
+    const itemDescription = material.itemDescription.trim() || 'Unlabeled material';
+    const unit = material.unit.trim() || 'ea';
+    const category = material.category.trim() || 'uncategorized';
+    const key = [
+      normalizeRollupKeyPart(itemDescription),
+      normalizeRollupKeyPart(unit),
+      normalizeRollupKeyPart(category),
+    ].join('|');
+    const existing = rollups.get(key);
+    const roomLabel = material.roomLabel?.trim() || 'Unassigned room';
+
+    if (existing) {
+      existing.totalQuantity += material.quantity;
+      existing.requirementIds.push(material.id);
+      const roomEntry = existing.rooms.find((entry) => entry.roomLabel === roomLabel);
+      if (roomEntry) {
+        roomEntry.quantity += material.quantity;
+      } else {
+        existing.rooms.push({ roomLabel, quantity: material.quantity });
+      }
+      return;
+    }
+
+    rollups.set(key, {
+      key,
+      itemDescription,
+      category,
+      totalQuantity: material.quantity,
+      unit,
+      requirementIds: [material.id],
+      rooms: [{ roomLabel, quantity: material.quantity }],
+    });
+  });
+
+  return Array.from(rollups.values())
+    .map((rollup) => ({
+      ...rollup,
+      totalQuantity: Number(rollup.totalQuantity.toFixed(2)),
+      rooms: rollup.rooms
+        .map((room) => ({ ...room, quantity: Number(room.quantity.toFixed(2)) }))
+        .sort((left, right) => left.roomLabel.localeCompare(right.roomLabel)),
+    }))
+    .sort((left, right) => left.itemDescription.localeCompare(right.itemDescription));
+};
+
+const createInspectionDecisionReport = (
+  inspection: Inspection,
+  findings: Finding[],
+  materials: MaterialRequirement[]
+): InspectionReportDecisionReport | undefined => {
+  const sections = inspection.generatedSections || [];
+  if (sections.length === 0) {
+    return undefined;
+  }
+
+  const findingMap = new Map(findings.map((finding) => [finding.id, finding]));
+  const materialMap = new Map(materials.map((material) => [material.id, material]));
+
+  const issues: InspectionReportDecisionReport['issues'] = [];
+  const passedItems: InspectionReportDecisionReport['passedItems'] = [];
+
+  sections
+    .slice()
+    .sort((left, right) => left.order - right.order)
+    .forEach((section: GeneratedInspectionSection) => {
+      section.items
+        .slice()
+        .sort((left, right) => left.order - right.order)
+        .forEach((item) => {
+          const outcome = getDecisionOutcome(item);
+          if (!outcome) {
+            return;
+          }
+
+          const roomLabel = section.roomLabel || item.roomLabel || section.title || 'Unassigned room';
+          if (outcome === 'good') {
+            passedItems.push({
+              itemId: item.id,
+              roomLabel,
+              itemLabel: item.label,
+            });
+            return;
+          }
+
+          const linkedMaterials = (
+            (item.materialRequirementIds || []).map((id) => materialMap.get(id)).filter(Boolean) as MaterialRequirement[]
+          ).concat(
+            materials.filter(
+              (requirement) =>
+                requirement.sourceGeneratedItemId === item.id &&
+                !(item.materialRequirementIds || []).includes(requirement.id)
+            )
+          );
+          const sourceFinding = (item.findingIds || []).map((id) => findingMap.get(id)).find(Boolean) || null;
+
+          issues.push({
+            itemId: item.id,
+            roomLabel,
+            itemLabel: item.label,
+            action: outcome,
+            description: sourceFinding?.description || undefined,
+            notes: item.notes || sourceFinding?.notes || undefined,
+            materialsAssigned: linkedMaterials.length > 0,
+            materials: linkedMaterials.map((requirement) => ({
+              requirementId: requirement.id,
+              label: requirement.itemDescription,
+              quantity: requirement.quantity,
+              unit: requirement.unit,
+              status: requirement.status,
+              selectedProductLabel: requirement.selectedMatch?.optionName,
+            })),
+          });
+        });
+    });
+
+  if (issues.length === 0 && passedItems.length === 0) {
+    return undefined;
+  }
+
+  return {
+    summary: {
+      totalChecked: issues.length + passedItems.length,
+      goodCount: passedItems.length,
+      repairCount: issues.filter((issue) => issue.action === 'repair').length,
+      replaceCount: issues.filter((issue) => issue.action === 'replace').length,
+      itemsNeedingMaterialsCount: issues.filter((issue) => !issue.materialsAssigned).length,
+    },
+    issues,
+    passedItems,
+  };
 };
 
 const getScopeReadiness = (
@@ -319,6 +495,32 @@ const createProcurementReviewGuidanceSummary = async (
   };
 };
 
+const createProcurementBundleSummary = (
+  inspection: Inspection,
+  materials: MaterialRequirement[]
+): InspectionProcurementBundleSummary | undefined => {
+  const bundles = ProcurementBundleService.resolveForInspection({
+    inspection,
+    requirements: materials,
+  });
+  if (bundles.length === 0) {
+    return undefined;
+  }
+  return {
+    bundleCount: bundles.length,
+    bundleIds: bundles.map((bundle) => bundle.id),
+    sourceItemCount: bundles.reduce((sum, bundle) => sum + bundle.sourceGeneratedItemIds.length, 0),
+    preferredProductTiers: Array.from(
+      new Set(
+        bundles
+          .map((bundle) => bundle.preferredProductTier)
+          .filter((tier): tier is TurnoverPresetProductTier => Boolean(tier))
+      )
+    ),
+    summaries: bundles.map((bundle) => `${bundle.label}: ${bundle.lines.length} line suggestion${bundle.lines.length === 1 ? '' : 's'}`),
+  };
+};
+
 export const InspectionReportSnapshotService = {
   async buildSnapshot(orgId: string, inspectionId: string): Promise<InspectionReportSnapshot | null> {
     const inspections = await InspectionService.listInspections(orgId);
@@ -336,18 +538,36 @@ export const InspectionReportSnapshotService = {
       createProcurementVendorIntelligenceSummary(orgId, inspectionId),
       createProcurementReviewGuidanceSummary(orgId, inspectionId),
     ]);
+    const resolvedProcurementBundles = ProcurementBundleService.resolveForInspection({
+      inspection,
+      requirements: materials,
+    });
+    const resolvedProcurementBundleProducts = await ProcurementProductResolutionService.resolveForBundles({
+      orgId,
+      bundles: resolvedProcurementBundles,
+      inspections: [inspection],
+    });
+    const procurementBundles = createProcurementBundleSummary(inspection, materials);
+    const decisionReport = createInspectionDecisionReport(inspection, findings, materials);
+    const materialRequirementRollups = createMaterialRequirementRollups(materials);
 
     return {
       inspectionId: inspection.id,
       unitId: inspection.unitId,
       generatedAt: Date.now(),
+      isInspectionFinalized: Boolean(inspection.isInspectionFinalized),
       findings,
       repairTasks: tasks,
       materialRequirements: materials,
+      materialRequirementRollups,
       summary: createInspectionOperationalSummary(inspection, findings, tasks, materials),
       procurementOptimization,
       procurementVendorIntelligence,
       procurementReviewGuidance,
+      procurementBundles,
+      resolvedProcurementBundles,
+      resolvedProcurementBundleProducts,
+      decisionReport,
     };
   },
 };
