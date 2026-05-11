@@ -10,7 +10,8 @@ $node = (Get-Command node -ErrorAction Stop).Source
 $cloudflared = (Get-Command cloudflared -ErrorAction Stop).Source
 $cloudflaredConfig = Join-Path $env:USERPROFILE '.cloudflared\unitflip-field.yml'
 $logRoot = Join-Path $env:LOCALAPPDATA 'UnitFlip'
-$previewLog = Join-Path $logRoot 'field-origin.log'
+$previewOutLog = Join-Path $logRoot 'field-origin.out.log'
+$previewErrLog = Join-Path $logRoot 'field-origin.err.log'
 $tunnelLog = Join-Path $logRoot 'field-cloudflared.log'
 
 New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
@@ -52,7 +53,7 @@ if (-not (Test-Path $distIndex)) {
 if (-not (Test-FieldOrigin)) {
     $previewArgs = 'scripts/preview-dist.mjs --host 127.0.0.1 --port 3100'
     Start-Process -FilePath $node -ArgumentList $previewArgs -WorkingDirectory $repoRoot -WindowStyle Hidden `
-        -RedirectStandardOutput $previewLog -RedirectStandardError $previewLog
+        -RedirectStandardOutput $previewOutLog -RedirectStandardError $previewErrLog
     Start-Sleep -Seconds 3
 }
 
