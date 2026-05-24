@@ -211,7 +211,7 @@ Validated Docker contract:
 - docker build --no-cache -t unitflip:dev .
 - docker build --no-cache --target lint -t unitflip:lint .
 - docker build --no-cache --target build -t unitflip:build .
-- docker run --rm -p 5173:3000 unitflip:dev npm run dev -- --host 0.0.0.0 --port 3000
+- docker run --rm -p 3000:3000 unitflip:dev npm run dev -- --host 0.0.0.0 --port 3000
 - docker compose up --build
 
 Next objective:

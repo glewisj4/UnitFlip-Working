@@ -60,6 +60,63 @@ type DraftSort =
   | 'least_recently_refreshed';
 type DraftGrouping = 'none' | 'triage';
 
+interface ProcurementWorkspacePreferences {
+  groupBy: GroupBy;
+  activeMode: ProcurementMode;
+  statusFilter: MaterialRequirementStatus | 'all';
+  draftFilter: DraftFilter;
+  draftSort: DraftSort;
+  draftGrouping: DraftGrouping;
+}
+
+const PROCUREMENT_WORKSPACE_PREFERENCES_PREFIX = 'unitflip_procurement_workspace_preferences_v1:';
+const GROUP_BY_OPTIONS: GroupBy[] = ['inspection', 'category', 'status'];
+const PROCUREMENT_MODE_OPTIONS: ProcurementMode[] = ['selection', 'assignment', 'vendor', 'receiving', 'verification', 'exceptions', 'completed'];
+const DRAFT_FILTER_OPTIONS: DraftFilter[] = ['all', 'needs_review', 'never_refreshed', 'stale_refresh', 'no_offer', 'vendor_issues', 'has_manual_note', 'no_manual_note'];
+const DRAFT_SORT_OPTIONS: DraftSort[] = ['most_stale', 'most_review_needed', 'highest_no_offer', 'highest_optimized_cost', 'most_recently_refreshed', 'least_recently_refreshed'];
+const DRAFT_GROUPING_OPTIONS: DraftGrouping[] = ['none', 'triage'];
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const readProcurementWorkspacePreferences = (orgId: string): Partial<ProcurementWorkspacePreferences> => {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const raw = window.localStorage.getItem(`${PROCUREMENT_WORKSPACE_PREFERENCES_PREFIX}${orgId}`);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed)) return {};
+
+    return {
+      groupBy: GROUP_BY_OPTIONS.includes(parsed.groupBy as GroupBy) ? (parsed.groupBy as GroupBy) : undefined,
+      activeMode: PROCUREMENT_MODE_OPTIONS.includes(parsed.activeMode as ProcurementMode) ? (parsed.activeMode as ProcurementMode) : undefined,
+      statusFilter:
+        parsed.statusFilter === 'all' || MATERIAL_REQUIREMENT_STATUSES.includes(parsed.statusFilter as MaterialRequirementStatus)
+          ? (parsed.statusFilter as MaterialRequirementStatus | 'all')
+          : undefined,
+      draftFilter: DRAFT_FILTER_OPTIONS.includes(parsed.draftFilter as DraftFilter) ? (parsed.draftFilter as DraftFilter) : undefined,
+      draftSort: DRAFT_SORT_OPTIONS.includes(parsed.draftSort as DraftSort) ? (parsed.draftSort as DraftSort) : undefined,
+      draftGrouping: DRAFT_GROUPING_OPTIONS.includes(parsed.draftGrouping as DraftGrouping) ? (parsed.draftGrouping as DraftGrouping) : undefined,
+    };
+  } catch {
+    return {};
+  }
+};
+
+const writeProcurementWorkspacePreferences = (orgId: string, preferences: ProcurementWorkspacePreferences) => {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(
+      `${PROCUREMENT_WORKSPACE_PREFERENCES_PREFIX}${orgId}`,
+      JSON.stringify(preferences)
+    );
+  } catch {
+    // Preferences are non-critical; the workspace must remain usable if storage is unavailable.
+  }
+};
+
 interface ProcurementWorkspaceProps {
   focusedUnitId?: string | null;
   initialFocus?: 'all' | 'procurement' | 'vendor' | 'receiving' | 'verification';
@@ -579,6 +636,7 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
   const [draftFilter, setDraftFilter] = useState<DraftFilter>('all');
   const [draftSort, setDraftSort] = useState<DraftSort>('most_stale');
   const [draftGrouping, setDraftGrouping] = useState<DraftGrouping>('none');
+  const [hasLoadedWorkspacePreferences, setHasLoadedWorkspacePreferences] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isCreatingDraft, setIsCreatingDraft] = useState(false);
   const [exportingDraftId, setExportingDraftId] = useState<string | null>(null);
@@ -671,6 +729,42 @@ export const ProcurementWorkspace: React.FC<ProcurementWorkspaceProps> = ({
       void loadData();
     }
   }, [org?.id, vendorDirectory]);
+
+  useEffect(() => {
+    setHasLoadedWorkspacePreferences(false);
+    if (!org) return;
+
+    const preferences = readProcurementWorkspacePreferences(org.id);
+    setGroupBy(preferences.groupBy || 'inspection');
+    setActiveMode(preferences.activeMode || 'selection');
+    setStatusFilter(preferences.statusFilter || 'all');
+    setDraftFilter(preferences.draftFilter || 'all');
+    setDraftSort(preferences.draftSort || 'most_stale');
+    setDraftGrouping(preferences.draftGrouping || 'none');
+    setHasLoadedWorkspacePreferences(true);
+  }, [org?.id]);
+
+  useEffect(() => {
+    if (!org || !hasLoadedWorkspacePreferences) return;
+
+    writeProcurementWorkspacePreferences(org.id, {
+      groupBy,
+      activeMode,
+      statusFilter,
+      draftFilter,
+      draftSort,
+      draftGrouping,
+    });
+  }, [
+    activeMode,
+    draftFilter,
+    draftGrouping,
+    draftSort,
+    groupBy,
+    hasLoadedWorkspacePreferences,
+    org,
+    statusFilter,
+  ]);
 
   useEffect(() => {
     if (isVendorView) return;
