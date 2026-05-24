@@ -20,6 +20,9 @@ tmp/
 .playwright-mcp/
 docker-config-codex/
 supabase/.temp/
+repo-dirty-worktree-*.patch
+repo-staged-*.patch
+repo-untracked-*.txt
 
 # Editor directories and files
 .vscode/*
