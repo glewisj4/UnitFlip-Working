@@ -22,6 +22,7 @@ Use this checklist before treating `field.fugetti.com` as safe:
 - Require identity-based login before the UnitFlip app loads.
 - Protect both the HTML app route and any API/share/report endpoints reachable through the same hostname.
 - Test from a logged-out browser profile and a separate network.
+- Logged-out or incognito requests to `https://field.fugetti.com` must show a Cloudflare Access, Zero Trust, VPN, or equivalent authentication challenge before any UnitFlip UI loads.
 - Confirm unauthenticated access shows the access provider challenge, not UnitFlip.
 - Confirm authenticated access still loads the focused field workflow on mobile.
 - Record who owns Access policy changes and where rollback happens.
