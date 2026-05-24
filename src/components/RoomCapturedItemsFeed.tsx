@@ -85,6 +85,39 @@ const transcriptStateLabels = {
 } as const;
 
 const KIND_OPTIONS: InspectionCaptureKind[] = ['replace', 'repair', 'missing', 'quantity', 'note', 'task'];
+type CapturedFeedGroupId = 'attention' | 'follow_up' | 'progress' | 'completed';
+
+const titleCase = (value: string) => value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+
+const normalizeStatus = (value?: string) => (value || '').trim().toLowerCase();
+
+const getCapturedFeedGroup = (item: RoomCapturedFeedItem): CapturedFeedGroupId => {
+  const status = normalizeStatus(item.statusLabel);
+  const priority = normalizeStatus(item.priorityLabel);
+  if (status.includes('blocked') || status.includes('failed') || priority.includes('high') || priority.includes('urgent') || item.type === 'missing') {
+    return 'attention';
+  }
+  if (status.includes('completed') || status.includes('resolved')) {
+    return 'completed';
+  }
+  if (item.entityType === 'task' || item.type === 'replace' || item.type === 'repair' || item.type === 'task') {
+    return 'follow_up';
+  }
+  return 'progress';
+};
+
+const getCapturedFeedGroupWeight = (item: RoomCapturedFeedItem) => {
+  const status = normalizeStatus(item.statusLabel);
+  const priority = normalizeStatus(item.priorityLabel);
+  if (status.includes('blocked') || status.includes('failed')) return 0;
+  if (priority.includes('high') || priority.includes('urgent')) return 1;
+  if (item.type === 'missing') return 2;
+  if (item.entityType === 'task') return 3;
+  if (item.type === 'replace') return 4;
+  if (item.type === 'repair') return 5;
+  if (status.includes('completed') || status.includes('resolved')) return 7;
+  return 6;
+};
 
 export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
   items,
@@ -106,6 +139,21 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
   onDeleteItem,
   recommendationPanel,
 }) => {
+  const groupedItems = {
+    attention: items
+      .filter((item) => getCapturedFeedGroup(item) === 'attention')
+      .sort((left, right) => getCapturedFeedGroupWeight(left) - getCapturedFeedGroupWeight(right)),
+    follow_up: items
+      .filter((item) => getCapturedFeedGroup(item) === 'follow_up')
+      .sort((left, right) => getCapturedFeedGroupWeight(left) - getCapturedFeedGroupWeight(right)),
+    progress: items
+      .filter((item) => getCapturedFeedGroup(item) === 'progress')
+      .sort((left, right) => getCapturedFeedGroupWeight(left) - getCapturedFeedGroupWeight(right)),
+    completed: items
+      .filter((item) => getCapturedFeedGroup(item) === 'completed')
+      .sort((left, right) => getCapturedFeedGroupWeight(left) - getCapturedFeedGroupWeight(right)),
+  };
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
@@ -113,9 +161,17 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
           <h3 className="text-base font-semibold text-slate-900">Structured Scope From Capture</h3>
           <p className="text-sm text-slate-500">Every saved capture becomes a real finding or repair task here. Open any item to edit the same record instead of managing a separate draft.</p>
         </div>
-        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
-          {items.length}
-        </span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+            {groupedItems.attention.length} need attention
+          </span>
+          <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-800">
+            {groupedItems.follow_up.length} need follow-up
+          </span>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+            {items.length} total
+          </span>
+        </div>
       </div>
 
       {items.length === 0 ? (
@@ -124,9 +180,79 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
         </div>
       ) : (
         <div className="space-y-3">
-          {items.map((item) => {
+          {([
+            {
+              id: 'attention',
+              title: 'Needs Attention',
+              detail: 'Blocked, failed, missing, or otherwise high-priority captured items.',
+              tone: 'border-amber-200 bg-amber-50',
+              items: groupedItems.attention,
+            },
+            {
+              id: 'follow_up',
+              title: 'Needs Materials / Follow-up',
+              detail: 'Repair and replacement records that are most likely to drive downstream work.',
+              tone: 'border-blue-200 bg-blue-50',
+              items: groupedItems.follow_up,
+            },
+            {
+              id: 'progress',
+              title: 'In Progress',
+              detail: 'Captured notes and findings that are saved but still need review or refinement.',
+              tone: 'border-slate-200 bg-slate-50',
+              items: groupedItems.progress,
+            },
+            {
+              id: 'completed',
+              title: 'Completed',
+              detail: 'Resolved captured items stay available here for auditability without crowding active work.',
+              tone: 'border-emerald-200 bg-emerald-50',
+              items: groupedItems.completed,
+            },
+          ] as Array<{
+            id: CapturedFeedGroupId;
+            title: string;
+            detail: string;
+            tone: string;
+            items: RoomCapturedFeedItem[];
+          }>).map((group) => {
+            if (group.items.length === 0) return null;
+            const GroupWrapper: React.ElementType = group.id === 'completed' ? 'details' : 'div';
+            const groupWrapperProps =
+              group.id === 'completed'
+                ? { className: `rounded-xl border p-3 ${group.tone}`, open: false }
+                : { className: `rounded-xl border p-3 ${group.tone}` };
+
+            return (
+              <GroupWrapper key={group.id} {...groupWrapperProps}>
+                {group.id === 'completed' ? (
+                  <summary className="flex cursor-pointer list-none items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-slate-900">{group.title}</h4>
+                      <p className="mt-1 text-xs text-slate-600">{group.detail}</p>
+                    </div>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                      {group.items.length}
+                    </span>
+                  </summary>
+                ) : (
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-semibold text-slate-900">{group.title}</h4>
+                      <p className="mt-1 text-xs text-slate-600">{group.detail}</p>
+                    </div>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                      {group.items.length}
+                    </span>
+                  </div>
+                )}
+
+                <div className={`space-y-2 ${group.id === 'completed' ? 'mt-3' : ''}`}>
+          {group.items.map((item) => {
             const Icon = iconByType[item.type];
             const isExpanded = expandedItemId === item.id && editingDraft?.existingEntityId === item.entityId;
+            const visibleChips = item.chips.slice(0, 3);
+            const extraChipCount = Math.max(0, item.chips.length - visibleChips.length);
 
             return (
               <div
@@ -151,14 +277,22 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
                         <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
                         <div className="mt-2 flex flex-wrap gap-1.5">
                           <span className={`rounded-full px-2 py-1 text-[11px] font-semibold ${typeChipStyles[item.type]}`}>
-                            {item.type}
+                            {titleCase(item.type)}
                           </span>
+                          <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-600">
+                            {item.entityType === 'task' ? 'Task' : 'Finding'}
+                          </span>
+                          {item.statusLabel ? (
+                            <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-700">
+                              {item.statusLabel}
+                            </span>
+                          ) : null}
                           {typeof item.quantity === 'number' ? (
                             <span className="rounded-full bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-800">
                               x{item.quantity}
                             </span>
                           ) : null}
-                          {item.chips.map((chip) => (
+                          {visibleChips.map((chip) => (
                             <span
                               key={chip}
                               className={`rounded-full px-2 py-1 text-[11px] font-medium ${
@@ -169,8 +303,13 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
                             </span>
                           ))}
                           {item.attachmentCount ? (
-                            <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-600">
-                              Photo {item.attachmentCount}
+                            <span className="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-medium text-emerald-800">
+                              Evidence {item.attachmentCount}
+                            </span>
+                          ) : null}
+                          {extraChipCount > 0 ? (
+                            <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-500">
+                              +{extraChipCount} more
                             </span>
                           ) : null}
                         </div>
@@ -184,13 +323,17 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
                             <p className="line-clamp-2 text-xs text-slate-500">{item.transcriptPreview || item.notes}</p>
                           </div>
                         ) : null}
-                        <p className="mt-2 text-xs text-slate-400">
-                          {[item.statusLabel, item.priorityLabel, item.timestampLabel].filter(Boolean).join(' • ')}
-                        </p>
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
+                          {item.priorityLabel ? <span>Priority: {item.priorityLabel}</span> : null}
+                          {item.timestampLabel ? <span>{item.timestampLabel}</span> : null}
+                        </div>
                       </div>
 
-                      <span className="flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-xs font-medium text-slate-600">
+                      <span className={`flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium ${
+                        isExpanded ? 'bg-blue-100 text-blue-700' : 'bg-white text-slate-600'
+                      }`}>
                         <Pencil size={12} />
+                        {isExpanded ? 'Editing' : 'Edit'}
                         <ChevronDown size={14} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                       </span>
                     </div>
@@ -199,6 +342,10 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
 
                 {isExpanded && editingDraft ? (
                   <div className="border-t border-blue-100 bg-white p-3">
+                    <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-blue-800">Editing saved record</div>
+                      <div className="mt-1 text-xs text-blue-900">Changes stay local until you save. Saved media remains evidence on this item unless you mark it for removal.</div>
+                    </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className="text-sm text-slate-700">
                         <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Type</span>
@@ -471,6 +618,10 @@ export const RoomCapturedItemsFeed: React.FC<RoomCapturedItemsFeedProps> = ({
                   </div>
                 ) : null}
               </div>
+            );
+          })}
+                </div>
+              </GroupWrapper>
             );
           })}
         </div>
