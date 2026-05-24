@@ -30,7 +30,7 @@ const normalizeRole = (role?: string): Role => {
   }
 
   if (role === 'contractor') return 'vendor';
-  return 'manager';
+  return 'vendor';
 };
 
 const buildLocalSession = ({ displayName, orgName, role }: LocalSignInInput): LocalSession => {

@@ -171,7 +171,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
   };
 
   const handleSeedDemoData = async () => {
-    if (isSeedingDemoData || role !== 'developer' || !org || !user) return;
+    if (isSeedingDemoData || !AuthPolicyService.canUseDeveloperTools(role, permissions) || !org || !user) return;
 
     setIsSeedingDemoData(true);
     console.log('[DevSeedTrigger] Starting demo data seed...', {
@@ -194,11 +194,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
     setIsMobileMenuOpen(false);
   };
 
+  const pageTitle = viewLabels[activeTab] || activeTab.replace(/-/g, ' ');
+
   if (mode === 'focused') {
     return (
       <div className="min-h-screen bg-slate-50">
         <main className="min-h-screen">
-          <div className="mx-auto max-w-7xl px-0 pb-4 md:pb-6">{children}</div>
+          <div className="mx-auto max-w-7xl px-3 pb-4 pt-[calc(4rem+env(safe-area-inset-top))] md:px-6 md:pb-6">{children}</div>
         </main>
 
         <FeedbackButton onClick={handleOpenFeedback} compactOnMobile />
@@ -224,31 +226,32 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row relative">
-      {/* Mobile Header */}
-      <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-20 shadow-md">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-lowes-blue rounded flex items-center justify-center text-white font-bold">
+    <div className="relative flex min-h-screen flex-col bg-slate-50">
+      <header className="sticky top-0 z-40 flex min-h-16 items-center justify-between gap-3 bg-slate-900 px-4 py-3 text-white shadow-md">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-lowes-blue font-bold text-white">
             UF
           </div>
-          <div>
-            <h1 className="text-lg font-bold tracking-tight">UnitFlip</h1>
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">UnitFlip</div>
+            <h1 className="truncate text-lg font-bold tracking-tight">{pageTitle}</h1>
           </div>
         </div>
-        <button 
-          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} 
-          className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+        <button
+          type="button"
+          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-white transition-colors hover:bg-slate-800"
           aria-label="Toggle menu"
+          aria-expanded={isMobileMenuOpen}
         >
           {isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
         </button>
-      </div>
+      </header>
 
       {/* Sidebar Navigation */}
       <aside className={`
         bg-slate-900 text-white w-64 flex-shrink-0
-        fixed inset-y-0 left-0 z-30 transform transition-transform duration-300 ease-in-out
-        md:relative md:translate-x-0
+        fixed inset-y-0 left-0 z-50 transform transition-transform duration-300 ease-in-out
         ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         <div className="p-6 border-b border-slate-700 flex items-center gap-3">
@@ -371,12 +374,14 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
             </>
           ) : null}
 
-          {canAccessView('templates') || canAccessView('admin') || role === 'developer' ? (
+          {AuthPolicyService.canManageTemplates(role, permissions) ||
+          AuthPolicyService.canAccessAdminSettings(role, permissions) ||
+          AuthPolicyService.canUseDeveloperTools(role, permissions) ? (
             <>
               <div className="my-4 border-t border-slate-800"></div>
               <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Admin</p>
 
-              {canAccessView('templates') ? (
+              {AuthPolicyService.canManageTemplates(role, permissions) ? (
                 <button
                   onClick={() => handleTabClick('templates')}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
@@ -390,7 +395,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
                 </button>
               ) : null}
 
-              {canAccessView('admin') ? (
+              {AuthPolicyService.canAccessAdminSettings(role, permissions) ? (
                 <button
                   onClick={() => handleTabClick('admin')}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${
@@ -404,7 +409,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
                 </button>
               ) : null}
 
-              {role === 'developer' ? (
+              {AuthPolicyService.canUseDeveloperTools(role, permissions) ? (
                 <div className="px-4">
                   <button
                     onClick={() => handleTabClick('feedback-management')}
@@ -422,6 +427,102 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
             </>
           ) : null}
 
+          <div className="my-4 border-t border-slate-800"></div>
+          <p className="px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Shell</p>
+
+          <div className="px-4">
+            <div className="grid grid-cols-2 rounded-xl border border-slate-700 bg-slate-800 p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onModeChange?.('focused');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+                  mode === 'focused' ? 'bg-white text-slate-900' : 'text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                Focused
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onModeChange?.('full');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors ${
+                  mode === 'full' ? 'bg-white text-slate-900' : 'text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                Full
+              </button>
+            </div>
+          </div>
+
+          <div className="px-4">
+            {!isOnline ? (
+              <div className="flex items-center gap-2 rounded-lg px-4 py-3 text-red-300">
+                <WifiOff size={18} />
+                <span className="font-medium">Offline</span>
+              </div>
+            ) : isSyncing ? (
+              <div className="flex items-center gap-2 rounded-lg px-4 py-3 text-blue-300">
+                <RefreshCw size={18} className="animate-spin" />
+                <span className="font-medium">Syncing</span>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  triggerSyncNow();
+                  setIsMobileMenuOpen(false);
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-green-300 transition-colors hover:bg-slate-800"
+                title={lastSyncAt ? `Last synced ${new Date(lastSyncAt).toLocaleTimeString()}` : 'Synced'}
+              >
+                <Wifi size={18} />
+                <span className="font-medium">Synced</span>
+              </button>
+            )}
+          </div>
+
+          {AuthPolicyService.canUseDeveloperTools(role, permissions) ? (
+            <div className="px-4">
+              <button
+                type="button"
+                onClick={() => void handleSeedDemoData()}
+                disabled={isSeedingDemoData || !org || !user}
+                className="flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left text-amber-200 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                title="Developer-only demo portfolio seed trigger"
+              >
+                <RefreshCw size={18} className={isSeedingDemoData ? 'animate-spin' : ''} />
+                <span className="font-medium">{isSeedingDemoData ? 'Seeding Demo Data...' : 'Seed Demo Data'}</span>
+              </button>
+            </div>
+          ) : null}
+
+          {user && org && role ? (
+            <div className="px-4">
+              <div className="rounded-lg border border-slate-700 bg-slate-800 p-4">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{role}</div>
+                <div className="mt-1 text-sm font-medium text-white">{user.name}</div>
+                <div className="text-xs text-slate-400">{org.name}</div>
+              </div>
+            </div>
+          ) : null}
+
+          {user ? (
+            <div className="px-4">
+              <button
+                type="button"
+                onClick={() => void handleSignOut()}
+                className="w-full rounded-lg px-4 py-3 text-left font-medium text-slate-300 transition-colors hover:bg-slate-800"
+              >
+                Switch Session
+              </button>
+            </div>
+          ) : null}
+
           <div className="pt-8 px-4">
              <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
                <h3 className="text-sm font-semibold text-slate-200 mb-2">Pro Tip</h3>
@@ -435,97 +536,15 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange
 
       {/* Overlay for mobile */}
       {isMobileMenuOpen && (
-        <div 
-          className="fixed inset-0 bg-black bg-opacity-50 z-20 md:hidden"
+        <div
+          className="fixed inset-0 z-40 bg-black bg-opacity-50"
           onClick={() => setIsMobileMenuOpen(false)}
         />
       )}
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto h-[calc(100vh-64px)] md:h-screen">
-        <header className="bg-white border-b border-slate-200 px-6 py-4 flex justify-between items-center sticky top-0 z-10 shadow-sm">
-          <h2 className="text-2xl font-bold text-slate-800 capitalize">
-            {viewLabels[activeTab] || activeTab.replace(/-/g, ' ')}
-          </h2>
-          <div className="flex items-center gap-4">
-            <div className="inline-flex rounded-2xl border border-slate-200 bg-slate-50 p-1">
-              <button
-                type="button"
-                onClick={() => onModeChange?.('focused')}
-                className={`rounded-2xl px-3 py-1.5 text-xs font-medium ${mode === 'focused' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}
-              >
-                Focused
-              </button>
-              <button
-                type="button"
-                onClick={() => onModeChange?.('full')}
-                className={`rounded-2xl px-3 py-1.5 text-xs font-medium ${mode === 'full' ? 'bg-slate-900 text-white' : 'text-slate-600'}`}
-              >
-                Full
-              </button>
-            </div>
-            {role === 'developer' ? (
-              <button
-                type="button"
-                onClick={handleSeedDemoData}
-                disabled={isSeedingDemoData || !org || !user}
-                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                title="Developer-only demo portfolio seed trigger"
-              >
-                {isSeedingDemoData ? 'Seeding Demo Data…' : 'Seed Demo Data'}
-              </button>
-            ) : null}
-            {user && org && role ? (
-              <div className="hidden rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-right md:block">
-                <div className="flex items-center justify-end gap-2">
-                  <span className="text-[11px] uppercase tracking-wide text-slate-400">Local Session</span>
-                  <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white">
-                    {role}
-                  </span>
-                </div>
-                <div className="text-sm font-medium text-slate-900">{user.name}</div>
-                <div className="text-xs text-slate-500">{org.name}</div>
-              </div>
-            ) : null}
-            {user ? (
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-              >
-                Switch Session
-              </button>
-            ) : null}
-            {/* Sync Status Badge */}
-            <div className="flex items-center gap-2 text-sm">
-                {!isOnline ? (
-                    <span className="flex items-center gap-1 text-red-500 bg-red-50 px-2 py-1 rounded-full border border-red-100">
-                        <WifiOff size={14} />
-                        Offline
-                    </span>
-                ) : isSyncing ? (
-                    <span className="flex items-center gap-1 text-blue-600 bg-blue-50 px-2 py-1 rounded-full border border-blue-100">
-                        <RefreshCw size={14} className="animate-spin" />
-                        Syncing...
-                    </span>
-                ) : (
-                    <button 
-                        onClick={triggerSyncNow}
-                        className="flex items-center gap-1 text-green-600 bg-green-50 px-2 py-1 rounded-full border border-green-100 hover:bg-green-100 transition-colors"
-                        title={lastSyncAt ? `Last synced ${new Date(lastSyncAt).toLocaleTimeString()}` : 'Synced'}
-                    >
-                        <Wifi size={14} />
-                        Synced
-                    </button>
-                )}
-            </div>
-            <span className="px-3 py-1 bg-green-100 text-green-700 text-sm font-medium rounded-full">
-              Database Active
-            </span>
-          </div>
-        </header>
-        
-        <div className="p-6 max-w-7xl mx-auto">
+      <main className="flex-1 overflow-auto">
+        <div className="mx-auto max-w-7xl p-4 md:p-6">
           {children}
         </div>
       </main>

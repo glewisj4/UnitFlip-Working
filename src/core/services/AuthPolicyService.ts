@@ -44,7 +44,6 @@ const ROLE_PERMISSION_MAP: Record<Role, Permission[]> = {
     'catalog:view',
     'inspection:view',
     'portfolio:view',
-    'templates:view',
     'procurement:view',
   ],
   vendor: ['procurement:view'],
@@ -116,6 +115,7 @@ export const AuthPolicyService = {
   canManageRetention(role: Role | null | undefined): boolean {
     return this.isAdminOrHigher(role);
   },
+
   getPermissionsForRole(role: Role): Permission[] {
     return [...ROLE_PERMISSION_MAP[role]];
   },
@@ -149,8 +149,8 @@ export const AuthPolicyService = {
   },
 
   getDefaultViewForRole(role: Role): AppView {
-    if (role === 'vendor') return 'procurement';
-    if (role === 'manager') return 'unit-management';
+    if (this.normalizeRole(role) === 'vendor') return 'procurement';
+    if (this.normalizeRole(role) === 'manager') return 'unit-management';
     return 'inspections';
   },
 };

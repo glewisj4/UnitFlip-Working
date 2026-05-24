@@ -20,7 +20,7 @@ const LOCAL_ROLE_OPTIONS: Array<{
   {
     role: 'manager',
     title: 'Manager',
-    description: 'Portfolio, inspection, scope, templates, and procurement access.',
+    description: 'Operational access for portfolio, inspection, and procurement workflows without system-level configuration tools.',
   },
   {
     role: 'vendor',
