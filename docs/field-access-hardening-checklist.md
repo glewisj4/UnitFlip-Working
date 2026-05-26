@@ -12,6 +12,8 @@ The field URL being reachable is useful for testing, but public access is not ac
 
 Do not implement Cloudflare Access directly from this repo. Track the required manual or infrastructure-owned checks here and keep the app release status blocked until access protection is confirmed.
 
+Detailed setup and verification steps live in [field-access-verification.md](field-access-verification.md).
+
 ## Implementation Plan
 
 Use this checklist before treating `field.fugetti.com` as safe:
@@ -26,6 +28,7 @@ Use this checklist before treating `field.fugetti.com` as safe:
 - Confirm unauthenticated access shows the access provider challenge, not UnitFlip.
 - Confirm authenticated access still loads the focused field workflow on mobile.
 - Record who owns Access policy changes and where rollback happens.
+- Record the completed verification result in the PR or release handoff.
 
 ## Release Blocker
 
